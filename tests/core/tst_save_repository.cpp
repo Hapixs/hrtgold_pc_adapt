@@ -120,6 +120,28 @@ private slots:
         QCOMPARE(repository.replace(bytes), SaveWriteError::InvalidHash);
     }
 
+    void permitsRepeatedWritesWithinOneTimestampSecond() {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        AppPaths paths(toPath(temporaryDirectory.path()));
+        const auto directory = paths.saveDirectory(validHash);
+        QVERIFY(std::filesystem::create_directories(directory));
+        const std::array<std::uint8_t, 1> originalBytes{1};
+        const std::array<std::uint8_t, 1> firstBytes{2};
+        const std::array<std::uint8_t, 1> secondBytes{3};
+        writeBytes(directory / "game.sav", originalBytes);
+        SaveRepository repository(directory, fixedClock());
+        QCOMPARE(repository.replace(firstBytes), SaveWriteError::None);
+
+        const auto error = repository.replace(secondBytes);
+
+        QCOMPARE(error, SaveWriteError::None);
+        QCOMPARE(repository.load(),
+                 std::vector<std::uint8_t>(secondBytes.begin(), secondBytes.end()));
+        QCOMPARE(readBytes(directory / "game-20240102-030405.sav.bak"),
+                 std::vector<std::uint8_t>(firstBytes.begin(), firstBytes.end()));
+    }
+
     void reportsReadOnlyDirectoryAsNotWritable() {
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());

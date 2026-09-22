@@ -104,7 +104,9 @@ SaveWriteError SaveRepository::replace(std::span<const std::uint8_t> bytes) {
     if (std::filesystem::is_regular_file(active, error)) {
         const auto backup = directory_ /
                             ("game-" + timestamp(clock_()) + ".sav.bak");
-        std::filesystem::copy_file(active, backup, error);
+        std::filesystem::copy_file(active, backup,
+                                   std::filesystem::copy_options::overwrite_existing,
+                                   error);
         if (error) {
             std::filesystem::remove(temporary, error);
             return SaveWriteError::NotWritable;
