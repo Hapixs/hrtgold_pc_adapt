@@ -1,0 +1,20 @@
+/build/
+/dist/
+
+# User-supplied Nintendo files and derived saves
+*.nds
+*.sav
+*.dsv
+firmware.bin
+firmware*.bin
+bios7.bin
+bios9.bin
+bios*.bin
+
+# Local-only runtime and development state
+*.log
+*.log.*
+.env
+.env.*
+local.settings.json
+settings.local.json
