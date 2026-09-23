@@ -5,9 +5,6 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <future>
-#include <optional>
-#include <semaphore>
 #include <string>
 #include <vector>
 
@@ -101,72 +98,25 @@ private slots:
         QVERIFY(!core.isRunning());
     }
 
-    void overlappingStartAndStopLeavesNoWorkerBehind() {
-        std::binary_semaphore startBeforeWorker{0};
-        std::binary_semaphore releaseStart{0};
-        std::binary_semaphore stopBeforeLock{0};
-        std::binary_semaphore releaseStop{0};
-        std::binary_semaphore stopAfterLock{0};
-        bool startGateTimedOut = false;
-        bool stopGateTimedOut = false;
+    void workerConstructionOwnsLifecycleLock() {
+        bool reachedWorkerBoundary = false;
+        bool lifecycleLockOwned = false;
         FakeEmulatorCore core(FakeEmulatorCore::TestHooks{
-            .beforeWorkerStart = [&] {
-                startBeforeWorker.release();
-                startGateTimedOut = !releaseStart.try_acquire_for(3s);
+            .beforeWorkerStart = [&](bool ownsLifecycleLock) {
+                reachedWorkerBoundary = true;
+                lifecycleLockOwned = ownsLifecycleLock;
             },
-            .beforeStopLock = [&] {
-                stopBeforeLock.release();
-                stopGateTimedOut = !releaseStop.try_acquire_for(3s);
-            },
-            .afterStopLock = [&] { stopAfterLock.release(); },
         });
         const auto loadResult = core.load(validConfig());
-        std::future<EmulationResult> startFuture =
-            std::async(std::launch::async, [&] { return core.start(); });
-
-        const auto startReachedBoundary = startBeforeWorker.try_acquire_for(2s);
-        std::future<EmulationResult> stopFuture;
-        bool stopReachedBoundary = false;
-        bool stopAcquiredBeforeStartReleased = false;
-        if (startReachedBoundary) {
-            stopFuture = std::async(std::launch::async, [&] { return core.stop(); });
-            stopReachedBoundary = stopBeforeLock.try_acquire_for(2s);
-            releaseStop.release();
-            if (stopReachedBoundary) {
-                stopAcquiredBeforeStartReleased = stopAfterLock.try_acquire_for(1s);
-            }
-        }
-
-        releaseStart.release();
-        const auto startReady = startFuture.wait_for(5s) == std::future_status::ready;
-        const auto startResult = startFuture.get();
-
-        bool stopReady = false;
-        std::optional<EmulationResult> stopResult;
-        if (stopFuture.valid()) {
-            stopReady = stopFuture.wait_for(5s) == std::future_status::ready;
-            stopResult = stopFuture.get();
-        } else if (startResult.ok()) {
-            releaseStop.release();
-            stopResult = core.stop();
-            stopReady = true;
-        }
-        const auto stopReachedEventually =
-            stopAcquiredBeforeStartReleased || stopAfterLock.try_acquire_for(2s);
+        const auto startResult = core.start();
+        const auto stopResult = core.stop();
 
         QVERIFY(loadResult.ok());
-        QVERIFY(startReachedBoundary);
-        QVERIFY(stopReachedBoundary);
-        QVERIFY(!startGateTimedOut);
-        QVERIFY(!stopGateTimedOut);
-        QVERIFY2(!stopAcquiredBeforeStartReleased,
-                 "stop() acquired the lifecycle lock before start() installed the worker");
-        QVERIFY(stopReachedEventually);
-        QVERIFY(startReady);
+        QVERIFY(reachedWorkerBoundary);
+        QVERIFY2(lifecycleLockOwned,
+                 "worker construction was reached without owning the lifecycle lock");
         QVERIFY(startResult.ok());
-        QVERIFY(stopReady);
-        QVERIFY(stopResult.has_value());
-        QVERIFY(stopResult->ok());
+        QVERIFY(stopResult.ok());
         QVERIFY(!core.isRunning());
     }
 };

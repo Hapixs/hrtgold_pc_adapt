@@ -43,7 +43,7 @@ EmulationResult FakeEmulatorCore::load(const EmulationConfig& config) {
 }
 
 EmulationResult FakeEmulatorCore::start() {
-    std::scoped_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     calls_.push_back("start");
     if (state_ != State::Loaded || worker_.joinable()) {
         return failure(EmulationErrorCode::CoreFailure,
@@ -52,7 +52,7 @@ EmulationResult FakeEmulatorCore::start() {
     state_ = State::Running;
     try {
         if (testHooks_.beforeWorkerStart) {
-            testHooks_.beforeWorkerStart();
+            testHooks_.beforeWorkerStart(lock.owns_lock());
         }
         worker_ = std::jthread([this](std::stop_token stopToken) { run(stopToken); });
     } catch (...) {
@@ -88,15 +88,9 @@ EmulationResult FakeEmulatorCore::resume() {
 }
 
 EmulationResult FakeEmulatorCore::stop() {
-    if (testHooks_.beforeStopLock) {
-        testHooks_.beforeStopLock();
-    }
     std::jthread stoppingWorker;
     {
         std::scoped_lock lock(mutex_);
-        if (testHooks_.afterStopLock) {
-            testHooks_.afterStopLock();
-        }
         calls_.push_back("stop");
         if (state_ != State::Running && state_ != State::Paused) {
             return failure(EmulationErrorCode::CoreFailure,

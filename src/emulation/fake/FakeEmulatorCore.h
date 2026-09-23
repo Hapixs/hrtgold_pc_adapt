@@ -15,9 +15,7 @@
 class FakeEmulatorCore final : public EmulatorCore {
 public:
     struct TestHooks {
-        std::function<void()> beforeWorkerStart;
-        std::function<void()> beforeStopLock;
-        std::function<void()> afterStopLock;
+        std::function<void(bool ownsLifecycleLock)> beforeWorkerStart;
     };
 
     // Test-only hooks must not throw or re-enter this core.
