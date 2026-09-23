@@ -14,8 +14,14 @@
 
 class FakeEmulatorCore final : public EmulatorCore {
 public:
-    // Test-only gate. It runs with the lifecycle mutex held and must not re-enter this core.
-    explicit FakeEmulatorCore(std::function<void()> beforeWorkerStartForTest = {});
+    struct TestHooks {
+        std::function<void()> beforeWorkerStart;
+        std::function<void()> beforeStopLock;
+        std::function<void()> afterStopLock;
+    };
+
+    // Test-only hooks must not throw or re-enter this core.
+    explicit FakeEmulatorCore(TestHooks testHooks = {});
     ~FakeEmulatorCore() override;
 
     FakeEmulatorCore(const FakeEmulatorCore&) = delete;
@@ -46,7 +52,7 @@ private:
     std::condition_variable_any wake_;
     State state_{State::Unloaded};
     std::vector<std::string> calls_;
-    std::function<void()> beforeWorkerStartForTest_;
+    TestHooks testHooks_;
     std::jthread worker_;
     std::uint64_t nextSequence_{1};
     std::atomic<DsButtonMask> buttons_{0};

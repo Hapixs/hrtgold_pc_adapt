@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <optional>
 #include <semaphore>
 #include <string>
 #include <vector>
@@ -101,27 +102,71 @@ private slots:
     }
 
     void overlappingStartAndStopLeavesNoWorkerBehind() {
-        std::binary_semaphore stopThreadEntered{0};
-        std::future<EmulationResult> stopFuture;
-        bool stopWasBlockedByStart = false;
-        FakeEmulatorCore core([&] {
-            stopFuture = std::async(std::launch::async, [&] {
-                stopThreadEntered.release();
-                return core.stop();
-            });
-            const auto stopThreadStarted = stopThreadEntered.try_acquire_for(250ms);
-            stopWasBlockedByStart =
-                stopThreadStarted && stopFuture.wait_for(50ms) == std::future_status::timeout;
+        std::binary_semaphore startBeforeWorker{0};
+        std::binary_semaphore releaseStart{0};
+        std::binary_semaphore stopBeforeLock{0};
+        std::binary_semaphore releaseStop{0};
+        std::binary_semaphore stopAfterLock{0};
+        bool startGateTimedOut = false;
+        bool stopGateTimedOut = false;
+        FakeEmulatorCore core(FakeEmulatorCore::TestHooks{
+            .beforeWorkerStart = [&] {
+                startBeforeWorker.release();
+                startGateTimedOut = !releaseStart.try_acquire_for(3s);
+            },
+            .beforeStopLock = [&] {
+                stopBeforeLock.release();
+                stopGateTimedOut = !releaseStop.try_acquire_for(3s);
+            },
+            .afterStopLock = [&] { stopAfterLock.release(); },
         });
-        QVERIFY(core.load(validConfig()).ok());
+        const auto loadResult = core.load(validConfig());
+        std::future<EmulationResult> startFuture =
+            std::async(std::launch::async, [&] { return core.start(); });
 
-        const auto startResult = core.start();
+        const auto startReachedBoundary = startBeforeWorker.try_acquire_for(2s);
+        std::future<EmulationResult> stopFuture;
+        bool stopReachedBoundary = false;
+        bool stopAcquiredBeforeStartReleased = false;
+        if (startReachedBoundary) {
+            stopFuture = std::async(std::launch::async, [&] { return core.stop(); });
+            stopReachedBoundary = stopBeforeLock.try_acquire_for(2s);
+            releaseStop.release();
+            if (stopReachedBoundary) {
+                stopAcquiredBeforeStartReleased = stopAfterLock.try_acquire_for(1s);
+            }
+        }
 
-        QVERIFY2(stopWasBlockedByStart,
-                 "stop() completed before start() installed the worker");
+        releaseStart.release();
+        const auto startReady = startFuture.wait_for(5s) == std::future_status::ready;
+        const auto startResult = startFuture.get();
+
+        bool stopReady = false;
+        std::optional<EmulationResult> stopResult;
+        if (stopFuture.valid()) {
+            stopReady = stopFuture.wait_for(5s) == std::future_status::ready;
+            stopResult = stopFuture.get();
+        } else if (startResult.ok()) {
+            releaseStop.release();
+            stopResult = core.stop();
+            stopReady = true;
+        }
+        const auto stopReachedEventually =
+            stopAcquiredBeforeStartReleased || stopAfterLock.try_acquire_for(2s);
+
+        QVERIFY(loadResult.ok());
+        QVERIFY(startReachedBoundary);
+        QVERIFY(stopReachedBoundary);
+        QVERIFY(!startGateTimedOut);
+        QVERIFY(!stopGateTimedOut);
+        QVERIFY2(!stopAcquiredBeforeStartReleased,
+                 "stop() acquired the lifecycle lock before start() installed the worker");
+        QVERIFY(stopReachedEventually);
+        QVERIFY(startReady);
         QVERIFY(startResult.ok());
-        QCOMPARE(stopFuture.wait_for(250ms), std::future_status::ready);
-        QVERIFY(stopFuture.get().ok());
+        QVERIFY(stopReady);
+        QVERIFY(stopResult.has_value());
+        QVERIFY(stopResult->ok());
         QVERIFY(!core.isRunning());
     }
 };
