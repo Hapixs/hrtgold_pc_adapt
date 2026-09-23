@@ -16,6 +16,7 @@ add_library(heartgold_core STATIC
     src/core/rom/RomValidator.cpp
     src/core/storage/AppPaths.cpp
     src/core/storage/SaveRepository.cpp
+    src/emulation/fake/FakeEmulatorCore.cpp
 )
 target_include_directories(heartgold_core PUBLIC src)
 target_link_libraries(heartgold_core PRIVATE Qt6::Core)
@@ -51,3 +52,17 @@ qt_add_executable(tst_save_repository
 target_link_libraries(tst_save_repository PRIVATE heartgold_core Qt6::Core Qt6::Test)
 
 add_test(NAME tst_save_repository COMMAND tst_save_repository)
+
+qt_add_executable(tst_frame_mailbox
+    tests/core/tst_frame_mailbox.cpp
+)
+target_link_libraries(tst_frame_mailbox PRIVATE heartgold_core Qt6::Core Qt6::Test)
+
+add_test(NAME tst_frame_mailbox COMMAND tst_frame_mailbox)
+
+qt_add_executable(tst_fake_emulator
+    tests/emulation/tst_fake_emulator.cpp
+)
+target_link_libraries(tst_fake_emulator PRIVATE heartgold_core Qt6::Core Qt6::Test)
+
+add_test(NAME tst_fake_emulator COMMAND tst_fake_emulator)
