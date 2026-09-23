@@ -26,7 +26,7 @@ FakeEmulatorCore::~FakeEmulatorCore() {
 EmulationResult FakeEmulatorCore::load(const EmulationConfig& config) {
     std::scoped_lock lock(mutex_);
     calls_.push_back("load");
-    if (state_ == State::Running || state_ == State::Paused) {
+    if ((state_ != State::Unloaded && state_ != State::Loaded) || worker_.joinable()) {
         return failure(EmulationErrorCode::CoreFailure,
                        "Cannot load a configuration while the fake core is running.");
     }
@@ -40,16 +40,20 @@ EmulationResult FakeEmulatorCore::load(const EmulationConfig& config) {
 }
 
 EmulationResult FakeEmulatorCore::start() {
-    {
-        std::scoped_lock lock(mutex_);
-        calls_.push_back("start");
-        if (state_ != State::Loaded || worker_.joinable()) {
-            return failure(EmulationErrorCode::CoreFailure,
-                           "The fake core must be loaded before it starts.");
-        }
-        state_ = State::Running;
+    std::scoped_lock lock(mutex_);
+    calls_.push_back("start");
+    if (state_ != State::Loaded || worker_.joinable()) {
+        return failure(EmulationErrorCode::CoreFailure,
+                       "The fake core must be loaded before it starts.");
     }
-    worker_ = std::jthread([this](std::stop_token stopToken) { run(stopToken); });
+    state_ = State::Running;
+    try {
+        worker_ = std::jthread([this](std::stop_token stopToken) { run(stopToken); });
+    } catch (...) {
+        state_ = State::Loaded;
+        return failure(EmulationErrorCode::CoreFailure,
+                       "The fake core worker could not be started.");
+    }
     return success();
 }
 
@@ -78,6 +82,7 @@ EmulationResult FakeEmulatorCore::resume() {
 }
 
 EmulationResult FakeEmulatorCore::stop() {
+    std::jthread stoppingWorker;
     {
         std::scoped_lock lock(mutex_);
         calls_.push_back("stop");
@@ -85,9 +90,18 @@ EmulationResult FakeEmulatorCore::stop() {
             return failure(EmulationErrorCode::CoreFailure,
                            "The fake core can stop only after it starts.");
         }
+        state_ = State::Stopping;
+        worker_.request_stop();
+        stoppingWorker = std::move(worker_);
+        wake_.notify_all();
+    }
+    if (stoppingWorker.joinable()) {
+        stoppingWorker.join();
+    }
+    {
+        std::scoped_lock lock(mutex_);
         state_ = State::Loaded;
     }
-    shutdownWorker();
     return success();
 }
 
@@ -136,12 +150,23 @@ void FakeEmulatorCore::run(std::stop_token stopToken) {
 }
 
 void FakeEmulatorCore::shutdownWorker() noexcept {
-    if (!worker_.joinable()) {
-        return;
+    std::jthread stoppingWorker;
+    {
+        std::scoped_lock lock(mutex_);
+        state_ = State::Stopping;
+        if (worker_.joinable()) {
+            worker_.request_stop();
+            stoppingWorker = std::move(worker_);
+        }
+        wake_.notify_all();
     }
-    worker_.request_stop();
-    wake_.notify_all();
-    worker_.join();
+    if (stoppingWorker.joinable()) {
+        stoppingWorker.join();
+    }
+    {
+        std::scoped_lock lock(mutex_);
+        state_ = State::Unloaded;
+    }
 }
 
 std::shared_ptr<VideoFrame> FakeEmulatorCore::makeFrame(std::uint64_t sequence) const {

@@ -32,7 +32,7 @@ public:
     DsButtonMask buttons() const noexcept;
 
 private:
-    enum class State { Unloaded, Loaded, Running, Paused };
+    enum class State { Unloaded, Loaded, Running, Paused, Stopping };
 
     static EmulationResult success();
     static EmulationResult failure(EmulationErrorCode code, std::string message);

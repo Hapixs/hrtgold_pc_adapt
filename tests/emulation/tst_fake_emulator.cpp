@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace std::chrono_literals;
@@ -96,6 +97,29 @@ private slots:
         const auto elapsed = std::chrono::steady_clock::now() - started;
         QVERIFY2(elapsed < 250ms, "Fake core worker did not join within 250 ms");
         QVERIFY(!core.isRunning());
+    }
+
+    void overlappingStartAndStopLeavesNoWorkerBehind() {
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            FakeEmulatorCore core;
+            QVERIFY(core.load(validConfig()).ok());
+            EmulationResult startResult;
+
+            std::thread starter([&] { startResult = core.start(); });
+            while (!core.isRunning()) {
+                std::this_thread::yield();
+            }
+            const auto stopStarted = std::chrono::steady_clock::now();
+            const auto stopResult = core.stop();
+            starter.join();
+
+            QVERIFY(startResult.ok());
+            QVERIFY(stopResult.ok());
+            QVERIFY(std::chrono::steady_clock::now() - stopStarted < 250ms);
+            QVERIFY(!core.isRunning());
+            QVERIFY2(core.start().ok(), "A worker survived an overlapping start/stop");
+            QVERIFY(core.stop().ok());
+        }
     }
 };
 

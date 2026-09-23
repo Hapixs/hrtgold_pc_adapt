@@ -49,6 +49,34 @@ private slots:
         QCOMPARE(frame->sequence, std::uint64_t{4});
         QCOMPARE(frame->rgba.front(), std::uint32_t{0xff010203});
     }
+
+    void heldSnapshotsStayImmutableAndSaturationDropsPublication() {
+        FrameMailbox box;
+        box.publish(makeFrame(1, 0xff111111));
+        auto first = box.latest();
+        box.publish(makeFrame(2, 0xff222222));
+        auto second = box.latest();
+        box.publish(makeFrame(3, 0xff333333));
+        auto third = box.latest();
+
+        box.publish(makeFrame(4, 0xff444444));
+
+        QVERIFY(first);
+        QVERIFY(second);
+        QVERIFY(third);
+        QCOMPARE(first->sequence, std::uint64_t{1});
+        QCOMPARE(first->rgba.front(), std::uint32_t{0xff111111});
+        QCOMPARE(second->sequence, std::uint64_t{2});
+        QCOMPARE(second->rgba.front(), std::uint32_t{0xff222222});
+        QCOMPARE(box.latest()->sequence, std::uint64_t{3});
+
+        first.reset();
+        box.publish(makeFrame(4, 0xff444444));
+
+        QCOMPARE(box.latest()->sequence, std::uint64_t{4});
+        QCOMPARE(second->sequence, std::uint64_t{2});
+        QCOMPARE(second->rgba.front(), std::uint32_t{0xff222222});
+    }
 };
 
 QTEST_GUILESS_MAIN(FrameMailboxTest)
