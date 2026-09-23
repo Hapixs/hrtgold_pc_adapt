@@ -30,14 +30,17 @@ private:
         const std::string& gameCode,
         std::uint32_t arm9Offset = 0x200,
         std::uint32_t arm9Size = 4,
-        std::string title = "POKEMON HG") {
+        std::string title = "POKEMON HG",
+        const QString& extension = QStringLiteral(".nds")) {
         std::vector<std::uint8_t> bytes(4096, 0);
         std::copy(title.begin(), title.end(), bytes.begin());
         std::copy(gameCode.begin(), gameCode.end(), bytes.begin() + 0x0c);
         writeLittleEndian32(bytes, 0x20, arm9Offset);
         writeLittleEndian32(bytes, 0x2c, arm9Size);
 
-        const auto fileName = QStringLiteral("fixture-%1.nds").arg(fixtureIndex++);
+        const auto fileName = QStringLiteral("fixture-%1%2")
+                                  .arg(fixtureIndex++)
+                                  .arg(extension);
         const auto path = std::filesystem::path{
             temporaryDirectory.filePath(fileName).toStdWString()};
         std::ofstream output(path, std::ios::binary);
@@ -80,6 +83,24 @@ private slots:
         QCOMPARE(result.status, RomStatus::MalformedHeader);
     }
 
+    void rejectsHeartGoldHeaderWithNonNdsExtension() {
+        RomValidator validator;
+
+        const auto result = validator.validate(
+            writeFixture("IPKF", 0x200, 4, "POKEMON HG", QStringLiteral(".txt")));
+
+        QCOMPARE(result.status, RomStatus::UnsupportedGame);
+    }
+
+    void acceptsUppercaseNdsExtension() {
+        RomValidator validator;
+
+        const auto result = validator.validate(
+            writeFixture("IPKF", 0x200, 4, "POKEMON HG", QStringLiteral(".NDS")));
+
+        QCOMPARE(result.status, RomStatus::ValidHeartGold);
+    }
+
     void reportsMissingFile() {
         RomValidator validator;
         const auto path = std::filesystem::path{
@@ -110,6 +131,15 @@ private slots:
 
         const auto result = validator.validate(
             writeFixture("IPKE", 0x200, 4, std::string("HG\0JUNK", 7)));
+
+        QCOMPARE(result.title, std::string("HG"));
+    }
+
+    void trimsLeadingAndTrailingTitleSpaces() {
+        RomValidator validator;
+
+        const auto result = validator.validate(
+            writeFixture("IPKE", 0x200, 4, "  HG  "));
 
         QCOMPARE(result.title, std::string("HG"));
     }

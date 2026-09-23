@@ -5,9 +5,18 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cwctype>
 
 namespace {
 constexpr std::uint64_t minimumHeaderSize = 0x200;
+
+bool hasNdsExtension(const std::filesystem::path& path) {
+    auto extension = path.extension().wstring();
+    for (auto& character : extension) {
+        character = static_cast<wchar_t>(std::towlower(character));
+    }
+    return extension == L".nds";
+}
 
 std::uint32_t readLittleEndian32(const QByteArray& bytes, std::size_t offset) {
     const auto* data = reinterpret_cast<const unsigned char*>(bytes.constData());
@@ -25,6 +34,9 @@ std::string readTitle(const QByteArray& bytes) {
     while (!title.empty() && title.back() == ' ') {
         title.pop_back();
     }
+    while (!title.empty() && title.front() == ' ') {
+        title.erase(title.begin());
+    }
     return title;
 }
 
@@ -41,6 +53,9 @@ RomValidation RomValidator::validate(const std::filesystem::path& path) const {
     }
     if (!exists) {
         return resultWithStatus(RomStatus::FileNotFound);
+    }
+    if (!hasNdsExtension(path)) {
+        return resultWithStatus(RomStatus::UnsupportedGame);
     }
 
     QFile file(QString::fromStdWString(path.wstring()));
