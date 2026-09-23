@@ -19,6 +19,9 @@ constexpr std::array<std::uint32_t, 8> kColorBars{
 };
 }
 
+FakeEmulatorCore::FakeEmulatorCore(std::function<void()> beforeWorkerStartForTest)
+    : beforeWorkerStartForTest_(std::move(beforeWorkerStartForTest)) {}
+
 FakeEmulatorCore::~FakeEmulatorCore() {
     shutdownWorker();
 }
@@ -48,6 +51,9 @@ EmulationResult FakeEmulatorCore::start() {
     }
     state_ = State::Running;
     try {
+        if (beforeWorkerStartForTest_) {
+            beforeWorkerStartForTest_();
+        }
         worker_ = std::jthread([this](std::stop_token stopToken) { run(stopToken); });
     } catch (...) {
         state_ = State::Loaded;

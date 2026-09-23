@@ -6,6 +6,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -13,7 +14,8 @@
 
 class FakeEmulatorCore final : public EmulatorCore {
 public:
-    FakeEmulatorCore() = default;
+    // Test-only gate. It runs with the lifecycle mutex held and must not re-enter this core.
+    explicit FakeEmulatorCore(std::function<void()> beforeWorkerStartForTest = {});
     ~FakeEmulatorCore() override;
 
     FakeEmulatorCore(const FakeEmulatorCore&) = delete;
@@ -44,6 +46,7 @@ private:
     std::condition_variable_any wake_;
     State state_{State::Unloaded};
     std::vector<std::string> calls_;
+    std::function<void()> beforeWorkerStartForTest_;
     std::jthread worker_;
     std::uint64_t nextSequence_{1};
     std::atomic<DsButtonMask> buttons_{0};

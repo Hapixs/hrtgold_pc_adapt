@@ -5,8 +5,9 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
+#include <semaphore>
 #include <string>
-#include <thread>
 #include <vector>
 
 using namespace std::chrono_literals;
@@ -100,26 +101,28 @@ private slots:
     }
 
     void overlappingStartAndStopLeavesNoWorkerBehind() {
-        for (int attempt = 0; attempt < 100; ++attempt) {
-            FakeEmulatorCore core;
-            QVERIFY(core.load(validConfig()).ok());
-            EmulationResult startResult;
+        std::binary_semaphore stopThreadEntered{0};
+        std::future<EmulationResult> stopFuture;
+        bool stopWasBlockedByStart = false;
+        FakeEmulatorCore core([&] {
+            stopFuture = std::async(std::launch::async, [&] {
+                stopThreadEntered.release();
+                return core.stop();
+            });
+            const auto stopThreadStarted = stopThreadEntered.try_acquire_for(250ms);
+            stopWasBlockedByStart =
+                stopThreadStarted && stopFuture.wait_for(50ms) == std::future_status::timeout;
+        });
+        QVERIFY(core.load(validConfig()).ok());
 
-            std::thread starter([&] { startResult = core.start(); });
-            while (!core.isRunning()) {
-                std::this_thread::yield();
-            }
-            const auto stopStarted = std::chrono::steady_clock::now();
-            const auto stopResult = core.stop();
-            starter.join();
+        const auto startResult = core.start();
 
-            QVERIFY(startResult.ok());
-            QVERIFY(stopResult.ok());
-            QVERIFY(std::chrono::steady_clock::now() - stopStarted < 250ms);
-            QVERIFY(!core.isRunning());
-            QVERIFY2(core.start().ok(), "A worker survived an overlapping start/stop");
-            QVERIFY(core.stop().ok());
-        }
+        QVERIFY2(stopWasBlockedByStart,
+                 "stop() completed before start() installed the worker");
+        QVERIFY(startResult.ok());
+        QCOMPARE(stopFuture.wait_for(250ms), std::future_status::ready);
+        QVERIFY(stopFuture.get().ok());
+        QVERIFY(!core.isRunning());
     }
 };
 
