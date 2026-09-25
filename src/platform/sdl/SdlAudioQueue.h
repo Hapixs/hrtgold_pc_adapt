@@ -22,13 +22,14 @@ bool submitBoundedAudio(Queue& queue, std::span<const std::int16_t> samples) {
     while (queued > headroom) {
         const int excessInputFrames = (queued - headroom + 3) / 4;
         const int drained = queue.drainOldestFrames(excessInputFrames);
-        if (drained <= 0) {
+        if (drained < 0) return false;
+        if (drained == 0) {
             if (!queue.clearQueued()) return false;
             break;
         }
         const int nextQueued = queue.queuedBytes();
-        if (nextQueued < 0 || nextQueued > queued ||
-            (nextQueued == queued && ++stalledReads >= 16)) {
+        if (nextQueued < 0 || nextQueued > queued) return false;
+        if (nextQueued == queued && ++stalledReads >= 16) {
             if (!queue.clearQueued()) return false;
             break;
         }

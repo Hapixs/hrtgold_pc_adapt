@@ -36,8 +36,13 @@ public:
     bool putAudio(std::span<const std::int16_t> samples) override {
         return sdl_audio::submitBoundedAudio(*this, samples);
     }
-    int queuedBytes() const { return static_cast<int>(queued.size() * sizeof(std::int16_t)); }
+    int queuedBytes() const {
+        if (queuedErrorAfterDrain && drainCount > 0) return -1;
+        return static_cast<int>(queued.size() * sizeof(std::int16_t));
+    }
     int drainOldestFrames(int frames) {
+        ++drainCount;
+        if (hardDrainFailure) return -1;
         if (zeroOutputDrain) return 0;
         const auto discarded = std::min<std::size_t>(queued.size(), static_cast<std::size_t>(frames) * 2);
         queued.erase(queued.begin(), queued.begin() + discarded);
@@ -45,6 +50,7 @@ public:
     }
     bool clearQueued() { ++clearCount; queued.clear(); return true; }
     bool putAudioSamples(std::span<const std::int16_t> samples) {
+        ++putCount;
         submitted.assign(samples.begin(), samples.end());
         if (!putSucceeds) return false;
         queued.insert(queued.end(), samples.begin(), samples.end());
@@ -56,7 +62,11 @@ public:
     bool audioSucceeds{true};
     bool putSucceeds{true};
     bool zeroOutputDrain{false};
+    bool hardDrainFailure{false};
+    bool queuedErrorAfterDrain{false};
     int clearCount{0};
+    int drainCount{0};
+    int putCount{0};
     int initCount{0};
     int audioOpenCount{0};
     int shutdownCount{0};
@@ -126,6 +136,8 @@ private slots:
     void destructionWaitsForInFlightAudioSubmission();
     void heldAudioSinkRemainsSafeAfterRuntimeDestruction();
     void zeroOutputDrainKeepsNewestChunkAndAudioAvailable();
+    void hardDrainFailureDisablesAudioWithoutAcceptingNewestChunk();
+    void queuedSizeFailureAfterDrainDisablesAudio();
 };
 
 void SdlRuntimeTest::ownsInitAndShutdown() {
@@ -455,6 +467,31 @@ void SdlRuntimeTest::zeroOutputDrainKeepsNewestChunkAndAudioAvailable() {
     QVERIFY(runtime.audioAvailable());
     QCOMPARE(api.queued, newest);
     QCOMPARE(api.clearCount, 1);
+}
+
+void SdlRuntimeTest::hardDrainFailureDisablesAudioWithoutAcceptingNewestChunk() {
+    FakeSdlApi api;
+    api.hardDrainFailure = true;
+    SdlRuntime runtime(api);
+    QSignalSpy errors(&runtime, &SdlRuntime::audioError);
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>(48000 * 2 * 240 / 1000, 1));
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>(48000 * 2 * 20 / 1000, 7));
+    QVERIFY(!runtime.audioAvailable());
+    QCOMPARE(api.putCount, 1);
+    QCOMPARE(api.clearCount, 0);
+    runtime.pump();
+    QCOMPARE(errors.size(), 1);
+}
+
+void SdlRuntimeTest::queuedSizeFailureAfterDrainDisablesAudio() {
+    FakeSdlApi api;
+    api.queuedErrorAfterDrain = true;
+    SdlRuntime runtime(api);
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>(48000 * 2 * 240 / 1000, 1));
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>(48000 * 2 * 20 / 1000, 7));
+    QVERIFY(!runtime.audioAvailable());
+    QCOMPARE(api.putCount, 1);
+    QCOMPARE(api.clearCount, 0);
 }
 
 QTEST_MAIN(SdlRuntimeTest)
