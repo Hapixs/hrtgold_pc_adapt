@@ -100,3 +100,19 @@ qt_add_executable(tst_sdl_runtime
 target_include_directories(tst_sdl_runtime PRIVATE src)
 target_link_libraries(tst_sdl_runtime PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME tst_sdl_runtime COMMAND tst_sdl_runtime)
+
+qt_add_executable(tst_game_surface
+    tests/ui/tst_game_surface.cpp
+)
+add_library(heartgold_ui STATIC
+    src/ui/GameSurface.cpp
+    src/ui/GameSurface.h
+)
+target_include_directories(heartgold_ui PUBLIC src)
+target_link_libraries(heartgold_ui PUBLIC Qt6::Quick)
+target_link_libraries(heartgold_pc PRIVATE heartgold_ui)
+target_link_libraries(tst_game_surface PRIVATE heartgold_ui Qt6::Test)
+add_test(NAME tst_game_surface COMMAND tst_game_surface)
+set_tests_properties(tst_game_surface PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
+)
