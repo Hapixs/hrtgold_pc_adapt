@@ -24,8 +24,8 @@ EmulationResult SessionController::load(const EmulationConfig& config) {
         return publishCoreError(result);
     }
 
-    // A failed start may have created worker-owned resources. Require an explicit
-    // successful stop before another load, even when start reports failure.
+    // Tentatively require cleanup while start runs; if it fails, isRunning()
+    // classifies whether partially active resources still require a stop.
     coreMayNeedStop_ = true;
     result = core_->start();
     if (!result.ok()) {
