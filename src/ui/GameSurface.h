@@ -30,4 +30,6 @@ private:
     QTimer refreshTimer_;
     std::atomic<std::uint64_t> acceptedSequence_{0};
     std::atomic<std::uint64_t> renderedSequence_{0};
+    std::atomic<std::uint64_t> sourceGeneration_{0};
+    std::uint64_t renderedGeneration_{0};
 };

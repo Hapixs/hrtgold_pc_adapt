@@ -32,8 +32,10 @@ QRectF GameSurface::fitRect(const QSizeF &container, qreal aspectRatio) {
 
 void GameSurface::setFrameMailbox(std::shared_ptr<FrameMailbox> mailbox) {
     if (frameMailbox_ != mailbox) {
+        acceptedFrames_ = FrameMailbox{};
         renderedSequence_.store(0, std::memory_order_release);
         acceptedSequence_.store(0, std::memory_order_release);
+        sourceGeneration_.fetch_add(1, std::memory_order_acq_rel);
     }
     frameMailbox_ = std::move(mailbox);
     if (frameMailbox_) {
@@ -45,7 +47,8 @@ void GameSurface::setFrameMailbox(std::shared_ptr<FrameMailbox> mailbox) {
 }
 
 void GameSurface::acceptFrame(std::shared_ptr<const VideoFrame> frame) {
-    if (!frame || frame->width != kDsScreenWidth || frame->height != kDsScreenHeight ||
+    if (frameMailbox_ || !frame || frame->width != kDsScreenWidth ||
+        frame->height != kDsScreenHeight ||
         frame->sequence <= displayedSequence()) {
         return;
     }
@@ -63,6 +66,12 @@ std::uint64_t GameSurface::displayedSequence() const noexcept {
 }
 
 QSGNode *GameSurface::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
+    const auto generation = sourceGeneration_.load(std::memory_order_acquire);
+    if (renderedGeneration_ != generation) {
+        delete oldNode;
+        oldNode = nullptr;
+        renderedGeneration_ = generation;
+    }
     auto *node = static_cast<QSGSimpleTextureNode *>(oldNode);
     const auto frame = frameMailbox_ ? frameMailbox_->latest() : acceptedFrames_.latest();
 

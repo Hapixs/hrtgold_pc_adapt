@@ -112,6 +112,84 @@ private slots:
         surface->setFrameMailbox(second);
         QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::blue), 3000);
     }
+
+    void switchingToEmptyMailboxClearsOldPixels() {
+        auto populated = std::make_shared<FrameMailbox>();
+        auto empty = std::make_shared<FrameMailbox>();
+        QQuickWindow window;
+        window.setColor(Qt::black);
+        window.resize(256, 192);
+        auto *surface = new GameSurface(window.contentItem());
+        surface->setSize(QSizeF(256, 192));
+        surface->setFrameMailbox(populated);
+        populated->publish(solidFrame(8, 0xffff0000));
+        window.show();
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::red), 3000);
+
+        surface->setFrameMailbox(empty);
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::black), 1000);
+        QCOMPARE(surface->displayedSequence(), std::uint64_t{0});
+    }
+
+    void detachingMailboxClearsOldPixels() {
+        auto mailbox = std::make_shared<FrameMailbox>();
+        QQuickWindow window;
+        window.setColor(Qt::black);
+        window.resize(256, 192);
+        auto *surface = new GameSurface(window.contentItem());
+        surface->setSize(QSizeF(256, 192));
+        surface->setFrameMailbox(mailbox);
+        mailbox->publish(solidFrame(8, 0xffff0000));
+        window.show();
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::red), 3000);
+
+        surface->setFrameMailbox(nullptr);
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::black), 1000);
+        QCOMPARE(surface->displayedSequence(), std::uint64_t{0});
+    }
+
+    void directFramesAreIgnoredWhileMailboxIsActive() {
+        auto mailbox = std::make_shared<FrameMailbox>();
+        QQuickWindow window;
+        window.setColor(Qt::black);
+        window.resize(256, 192);
+        auto *surface = new GameSurface(window.contentItem());
+        surface->setSize(QSizeF(256, 192));
+        surface->setFrameMailbox(mailbox);
+        mailbox->publish(solidFrame(2, 0xff0000ff));
+        window.show();
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::blue), 3000);
+
+        surface->acceptFrame(solidFrame(9, 0xff00ff00));
+        QCOMPARE(surface->displayedSequence(), std::uint64_t{2});
+        QCOMPARE(window.grabWindow().pixelColor(128, 96), QColor(Qt::blue));
+
+        surface->setFrameMailbox(nullptr);
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::black), 1000);
+        QCOMPARE(surface->displayedSequence(), std::uint64_t{0});
+    }
+
+    void detachStartsWithFreshDirectFrames() {
+        QQuickWindow window;
+        window.setColor(Qt::black);
+        window.resize(256, 192);
+        auto *surface = new GameSurface(window.contentItem());
+        surface->setSize(QSizeF(256, 192));
+        surface->acceptFrame(solidFrame(7, 0xffff0000));
+        window.show();
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::red), 3000);
+
+        auto mailbox = std::make_shared<FrameMailbox>();
+        mailbox->publish(solidFrame(2, 0xff0000ff));
+        surface->setFrameMailbox(mailbox);
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::blue), 3000);
+
+        surface->setFrameMailbox(nullptr);
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::black), 1000);
+        surface->acceptFrame(solidFrame(1, 0xff00ff00));
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(Qt::green), 3000);
+        QCOMPARE(surface->displayedSequence(), std::uint64_t{1});
+    }
 };
 
 QTEST_MAIN(GameSurfaceTest)
