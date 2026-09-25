@@ -29,6 +29,7 @@ EmulationResult SessionController::load(const EmulationConfig& config) {
     coreMayNeedStop_ = true;
     result = core_->start();
     if (!result.ok()) {
+        coreMayNeedStop_ = core_->isRunning();
         return publishCoreError(result);
     }
 

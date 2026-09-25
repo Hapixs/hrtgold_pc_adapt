@@ -32,6 +32,7 @@ public:
 
     EmulationResult start() override {
         calls.push_back("start");
+        running = startResult.ok() || runningAfterFailedStart;
         return startResult;
     }
 
@@ -53,6 +54,12 @@ public:
 
     EmulationResult stop() override {
         calls.push_back("stop");
+        if (rejectStopWhileInactive && !running) {
+            return failure("cannot stop an inactive core");
+        }
+        if (stopResult.ok()) {
+            running = false;
+        }
         return stopResult;
     }
 
@@ -62,13 +69,16 @@ public:
     }
 
     std::shared_ptr<const VideoFrame> latestFrame() const override { return {}; }
-    bool isRunning() const noexcept override { return false; }
+    bool isRunning() const noexcept override { return running; }
 
     EmulationResult loadResult;
     EmulationResult startResult;
     EmulationResult pauseResult;
     EmulationResult resumeResult;
     EmulationResult stopResult;
+    bool runningAfterFailedStart{false};
+    bool rejectStopWhileInactive{false};
+    bool running{false};
     std::function<void()> duringPause;
     std::function<void()> duringResume;
     std::vector<std::string> calls;
@@ -221,18 +231,69 @@ private slots:
         QCOMPARE(errorCount, 1);
     }
 
-    void startFailureAllowsConservativeStopCleanup() {
+    void inactiveStartFailureAllowsAnotherLoadWithoutStop() {
         auto core = std::make_unique<ProbeEmulatorCore>();
         auto* observed = core.get();
-        core->startResult = failure("start failed");
+        core->startResult = failure("start failed before becoming active");
+        core->rejectStopWhileInactive = true;
         SessionController session(std::move(core));
+        std::vector<SessionState> states;
+        int errorCount = 0;
+        session.onStateChanged([&](SessionState state) { states.push_back(state); });
+        session.onError([&](const EmulationResult&) { ++errorCount; });
         QVERIFY(!session.load(validConfig()).ok());
+        observed->startResult = {};
+
+        QVERIFY(session.load(validConfig()).ok());
+
+        QCOMPARE(errorCount, 1);
+        QCOMPARE(session.state(), SessionState::Playing);
+        QCOMPARE(states,
+                 std::vector<SessionState>({SessionState::Loading,
+                                            SessionState::Error,
+                                            SessionState::Loading,
+                                            SessionState::Playing}));
+        QCOMPARE(observed->calls,
+                 std::vector<std::string>({"load", "start", "load", "start"}));
+        QVERIFY(session.stop().ok());
+    }
+
+    void activeStartFailureRequiresSuccessfulStopBeforeReload() {
+        auto core = std::make_unique<ProbeEmulatorCore>();
+        auto* observed = core.get();
+        core->startResult = failure("start failed after becoming active");
+        core->runningAfterFailedStart = true;
+        core->rejectStopWhileInactive = true;
+        SessionController session(std::move(core));
+        std::vector<SessionState> states;
+        int errorCount = 0;
+        session.onStateChanged([&](SessionState state) { states.push_back(state); });
+        session.onError([&](const EmulationResult&) { ++errorCount; });
+        QVERIFY(!session.load(validConfig()).ok());
+        observed->startResult = {};
+
+        QVERIFY(!session.load(validConfig()).ok());
+        QCOMPARE(errorCount, 1);
+        QCOMPARE(session.state(), SessionState::Error);
+        QCOMPARE(observed->calls, std::vector<std::string>({"load", "start"}));
 
         QVERIFY(session.stop().ok());
-
         QCOMPARE(session.state(), SessionState::NoRom);
+        QVERIFY(session.load(validConfig()).ok());
+
+        QCOMPARE(errorCount, 1);
+        QCOMPARE(session.state(), SessionState::Playing);
+        QCOMPARE(states,
+                 std::vector<SessionState>({SessionState::Loading,
+                                            SessionState::Error,
+                                            SessionState::Stopping,
+                                            SessionState::NoRom,
+                                            SessionState::Loading,
+                                            SessionState::Playing}));
         QCOMPARE(observed->calls,
-                 std::vector<std::string>({"load", "start", "buttons:0", "stop"}));
+                 std::vector<std::string>({"load", "start", "buttons:0", "stop",
+                                           "load", "start"}));
+        QVERIFY(session.stop().ok());
     }
 
     void pauseFailurePublishesErrorExactlyOnce() {
