@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <QMetaObject>
+#include <QScopedValueRollback>
 #include <vector>
 
 namespace {
@@ -26,6 +27,22 @@ InputAction directionFor(std::size_t index) {
                                     InputAction::MoveLeft, InputAction::MoveRight};
     return directions[index];
 }
+
+InputAction actionFor(std::size_t index) {
+    if (index < 4) return directionFor(index);
+    return index == 4 ? InputAction::Confirm :
+           index == 5 ? InputAction::Back : InputAction::OpenMenu;
+}
+
+std::size_t kindIndex(InputDeviceKind kind) {
+    switch (kind) {
+    case InputDeviceKind::Keyboard: return 0;
+    case InputDeviceKind::Xbox: return 1;
+    case InputDeviceKind::PlayStation: return 2;
+    case InputDeviceKind::GenericGamepad: return 3;
+    }
+    return 0;
+}
 }
 
 SdlRuntime::SdlRuntime(SdlApi& api, QObject* parent) : QObject(parent), api_(api) {
@@ -42,28 +59,45 @@ SdlRuntime::SdlRuntime(SdlApi& api, QObject* parent) : QObject(parent), api_(api
 
 SdlRuntime::~SdlRuntime() {
     for (const auto& [id, unused] : gamepads_) api_.closeGamepad(id);
+    std::lock_guard lock(audioMutex_);
+    audioShuttingDown_ = true;
+    audioAvailable_.store(false);
     api_.shutdown();
 }
 
 void SdlRuntime::pump() {
-    if (!initialized_) return;
+    if (!initialized_ || pumping_) return;
+    QScopedValueRollback guard(pumping_, true);
     while (const auto event = api_.pollEvent()) handle(*event);
 }
 
-void SdlRuntime::emitAction(Gamepad& pad, InputAction action, bool pressed) {
+void SdlRuntime::setHeld(int id, InputAction action, bool pressed) {
     const auto index = actionIndex(action);
-    if (pad.emitted[index] == pressed) return;
-    pad.emitted[index] = pressed;
-    if (pressed && activeDevice_ != pad.kind) {
-        activeDevice_ = pad.kind;
+    InputDeviceKind kind;
+    bool aggregateChanged = false;
+    {
+        auto it = gamepads_.find(id);
+        if (it == gamepads_.end() || it->second.held[index] == pressed) return;
+        kind = it->second.kind;
+        it->second.held[index] = pressed;
+        auto& count = heldCounts_[kindIndex(kind)][index];
+        if (pressed) aggregateChanged = count++ == 0;
+        else aggregateChanged = --count == 0;
+    }
+    if (pressed) activeId_ = id;
+    if (pressed && activeDevice_ != kind) {
+        activeDevice_ = kind;
         emit activeDeviceChanged(activeDevice_);
     }
-    emit inputEvent({action, pressed ? InputPhase::Pressed : InputPhase::Released, pad.kind});
+    if (aggregateChanged) emit inputEvent({action, pressed ? InputPhase::Pressed : InputPhase::Released, kind});
 }
 
-void SdlRuntime::updateDirection(Gamepad& pad, InputAction action) {
+void SdlRuntime::updateDirection(int id, InputAction action) {
     const auto index = actionIndex(action);
-    emitAction(pad, action, pad.buttons[index] || pad.axisDirections[index]);
+    const auto it = gamepads_.find(id);
+    if (it == gamepads_.end()) return;
+    const bool pressed = it->second.buttons[index] || it->second.axisDirections[index];
+    setHeld(id, action, pressed);
 }
 
 void SdlRuntime::handle(const SdlApi::Event& event) {
@@ -76,32 +110,39 @@ void SdlRuntime::handle(const SdlApi::Event& event) {
     if (event.type == SdlApi::EventType::GamepadRemoved) {
         auto it = gamepads_.find(event.id);
         if (it == gamepads_.end()) return;
-        for (std::size_t i = 0; i < it->second.emitted.size(); ++i) {
-            if (it->second.emitted[i]) emitAction(it->second, i < 4 ? directionFor(i) :
-                (i == 4 ? InputAction::Confirm : i == 5 ? InputAction::Back : InputAction::OpenMenu), false);
+        const auto removed = it->second;
+        gamepads_.erase(it);
+        std::array<bool, 7> released{};
+        for (std::size_t i = 0; i < removed.held.size(); ++i) {
+            if (removed.held[i]) released[i] = --heldCounts_[kindIndex(removed.kind)][i] == 0;
         }
         api_.closeGamepad(event.id);
-        gamepads_.erase(it);
+        bool deviceChanged = false;
         if (activeId_ == event.id) {
             activeId_ = -1;
             const auto next = gamepads_.empty() ? InputDeviceKind::Keyboard : gamepads_.begin()->second.kind;
-            if (next != activeDevice_) { activeDevice_ = next; emit activeDeviceChanged(next); }
+            deviceChanged = next != activeDevice_;
+            activeDevice_ = next;
         }
+        for (std::size_t i = 0; i < released.size(); ++i) {
+            if (released[i]) emit inputEvent({actionFor(i), InputPhase::Released, removed.kind});
+        }
+        if (deviceChanged) emit activeDeviceChanged(activeDevice_);
         return;
     }
-    auto it = gamepads_.find(event.id);
-    if (it == gamepads_.end()) return;
-    auto& pad = it->second;
     if (event.type == SdlApi::EventType::AxisMotion) {
         const auto base = event.axis == SdlApi::Axis::LeftX ? 2 : 0;
         if (event.axis == SdlApi::Axis::Unknown) return;
         const bool negative = event.value <= -16000;
         const bool positive = event.value >= 16000;
-        pad.axisDirections[base] = negative;
-        pad.axisDirections[base + 1] = positive;
-        updateDirection(pad, directionFor(base));
-        updateDirection(pad, directionFor(base + 1));
-        if (negative || positive) activeId_ = event.id;
+        {
+            auto it = gamepads_.find(event.id);
+            if (it == gamepads_.end()) return;
+            it->second.axisDirections[base] = negative;
+            it->second.axisDirections[base + 1] = positive;
+        }
+        updateDirection(event.id, directionFor(base));
+        updateDirection(event.id, directionFor(base + 1));
         return;
     }
     const bool pressed = event.type == SdlApi::EventType::ButtonDown;
@@ -117,30 +158,40 @@ void SdlRuntime::handle(const SdlApi::Event& event) {
     default: return;
     }
     const auto index = actionIndex(action);
-    pad.buttons[index] = pressed;
-    if (index < 4) updateDirection(pad, action);
-    else emitAction(pad, action, pressed);
-    if (pressed) activeId_ = event.id;
+    {
+        auto it = gamepads_.find(event.id);
+        if (it == gamepads_.end()) return;
+        it->second.buttons[index] = pressed;
+    }
+    if (index < 4) updateDirection(event.id, action);
+    else setHeld(event.id, action, pressed);
 }
 
 void SdlRuntime::setVolume(float volume) noexcept {
-    volume_ = std::isfinite(volume) ? std::clamp(volume, 0.0f, 1.0f) : 0.0f;
+    volume_.store(std::isfinite(volume) ? std::clamp(volume, 0.0f, 1.0f) : 0.0f);
 }
 
 void SdlRuntime::submitAudio(std::span<const std::int16_t> samples) {
-    if (!audioAvailable_ || samples.empty()) return;
+    if (!audioAvailable_.load() || samples.empty()) return;
     const auto completeFrames = samples.first(samples.size() / 2 * 2);
     const auto count = std::min(completeFrames.size(), maxAudioSamples);
     if (count == 0) return;
     const auto tail = completeFrames.last(count);
+    const auto volume = volume_.load();
     std::vector<std::int16_t> scaled;
     scaled.reserve(count);
     for (const auto sample : tail) {
-        const auto value = static_cast<int>(std::lround(static_cast<float>(sample) * volume_));
+        const auto value = static_cast<int>(std::lround(static_cast<float>(sample) * volume));
         scaled.push_back(static_cast<std::int16_t>(std::clamp(value, -32768, 32767)));
     }
-    if (!api_.putAudio(scaled)) {
-        audioAvailable_ = false;
-        emit audioError(QStringLiteral("SDL audio submission failed"));
+    {
+        std::lock_guard lock(audioMutex_);
+        if (audioShuttingDown_ || !audioAvailable_.load()) return;
+        if (!api_.putAudio(scaled)) {
+            audioAvailable_.store(false);
+            QMetaObject::invokeMethod(this, [this] {
+                emit audioError(QStringLiteral("SDL audio submission failed"));
+            }, Qt::QueuedConnection);
+        }
     }
 }

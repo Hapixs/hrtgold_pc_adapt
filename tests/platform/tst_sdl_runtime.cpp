@@ -4,11 +4,18 @@
 #include <QTest>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <deque>
+#include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <vector>
 
-class FakeSdlApi final : public SdlApi {
+class FakeSdlApi : public SdlApi {
 public:
     bool init() override { ++initCount; return initSucceeds; }
     std::optional<Event> pollEvent() override {
@@ -19,14 +26,21 @@ public:
     }
     std::optional<InputDeviceKind> openGamepad(int id) override {
         opened.push_back(id);
+        if (onOpen) onOpen();
         const auto it = kinds.find(id);
         return it == kinds.end() ? std::nullopt : std::optional(it->second);
     }
-    void closeGamepad(int id) override { closed.push_back(id); }
+    void closeGamepad(int id) override { closed.push_back(id); if (onClose) onClose(); }
     bool openAudioStream() override { ++audioOpenCount; return audioSucceeds; }
     bool putAudio(std::span<const std::int16_t> samples) override {
         submitted.assign(samples.begin(), samples.end());
-        return putSucceeds;
+        if (!putSucceeds) return false;
+        queued.insert(queued.end(), samples.begin(), samples.end());
+        constexpr std::size_t maxSamples = 48000 * 2 / 4;
+        if (queued.size() > maxSamples) {
+            queued.erase(queued.begin(), queued.begin() + (queued.size() - maxSamples));
+        }
+        return true;
     }
     void shutdown() override { ++shutdownCount; }
 
@@ -41,6 +55,42 @@ public:
     std::vector<int> opened;
     std::vector<int> closed;
     std::vector<std::int16_t> submitted;
+    std::vector<std::int16_t> queued;
+    std::function<void()> onOpen;
+    std::function<void()> onClose;
+};
+
+class BlockingAudioApi final : public FakeSdlApi {
+public:
+    bool putAudio(std::span<const std::int16_t> samples) override {
+        {
+            std::unique_lock lock(mutex);
+            inPut = true;
+            condition.notify_all();
+            condition.wait(lock, [&] { return releasePut; });
+            inPut = false;
+            condition.notify_all();
+        }
+        return FakeSdlApi::putAudio(samples);
+    }
+
+    void shutdown() override {
+        {
+            std::unique_lock lock(mutex);
+            shutdownEntered = true;
+            shutdownOverlappedPut = inPut;
+            condition.notify_all();
+            condition.wait(lock, [&] { return !inPut; });
+        }
+        FakeSdlApi::shutdown();
+    }
+
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool inPut{false};
+    bool releasePut{false};
+    bool shutdownEntered{false};
+    bool shutdownOverlappedPut{false};
 };
 
 class SdlRuntimeTest final : public QObject {
@@ -59,6 +109,11 @@ private slots:
     void audioDropsIncompleteStereoFrameWithoutShiftingChannels();
     void volumeClampsAndMuteSilences();
     void failedSubmissionDisablesAudio();
+    void sameKindPadsKeepActionHeldUntilLastHolderReleases();
+    void audioQueueRetainsNewestQuarterSecondAcrossSubmissions();
+    void reentrantPumpDefersRemovalUntilInputSignalReturns();
+    void reentrantPumpDuringOpenAndCloseKeepsEventOrder();
+    void destructionWaitsForInFlightAudioSubmission();
 };
 
 void SdlRuntimeTest::ownsInitAndShutdown() {
@@ -229,7 +284,120 @@ void SdlRuntimeTest::failedSubmissionDisablesAudio() {
     api.putSucceeds = false;
     runtime.submitAudio(std::vector<std::int16_t>{1, 2});
     QVERIFY(!runtime.audioAvailable());
+    QCoreApplication::processEvents();
     QCOMPARE(errors.size(), 1);
+}
+
+void SdlRuntimeTest::sameKindPadsKeepActionHeldUntilLastHolderReleases() {
+    FakeSdlApi api;
+    api.kinds = {{1, InputDeviceKind::Xbox}, {2, InputDeviceKind::Xbox}};
+    SdlRuntime runtime(api);
+    QSignalSpy inputs(&runtime, &SdlRuntime::inputEvent);
+    api.events.push_back({SdlApi::EventType::GamepadAdded, 1});
+    api.events.push_back({SdlApi::EventType::GamepadAdded, 2});
+    api.events.push_back({SdlApi::EventType::ButtonDown, 1, SdlApi::Button::South});
+    api.events.push_back({SdlApi::EventType::ButtonDown, 2, SdlApi::Button::South});
+    api.events.push_back({SdlApi::EventType::GamepadRemoved, 1});
+    runtime.pump();
+    QCOMPARE(inputs.size(), 1);
+    QCOMPARE(inputs.at(0).at(0).value<InputEvent>().phase, InputPhase::Pressed);
+    api.events.push_back({SdlApi::EventType::ButtonUp, 2, SdlApi::Button::South});
+    runtime.pump();
+    QCOMPARE(inputs.size(), 2);
+    QCOMPARE(inputs.at(1).at(0).value<InputEvent>().phase, InputPhase::Released);
+}
+
+void SdlRuntimeTest::audioQueueRetainsNewestQuarterSecondAcrossSubmissions() {
+    FakeSdlApi api;
+    SdlRuntime runtime(api);
+    std::vector<std::int16_t> first(48000 * 2 * 240 / 1000, 1);
+    std::fill(first.end() - 960, first.end(), 2);
+    const std::vector<std::int16_t> second(48000 * 2 * 20 / 1000, 3);
+    runtime.submitAudio(first);
+    runtime.submitAudio(second);
+    QCOMPARE(api.queued.size(), std::size_t{24000});
+    QCOMPARE(api.queued.front(), std::int16_t{1});
+    QCOMPARE(api.queued.at(24000 - 960 - second.size()), std::int16_t{2});
+    QCOMPARE(api.queued.back(), std::int16_t{3});
+}
+
+void SdlRuntimeTest::reentrantPumpDefersRemovalUntilInputSignalReturns() {
+    FakeSdlApi api;
+    api.kinds[7] = InputDeviceKind::Xbox;
+    SdlRuntime runtime(api);
+    QSignalSpy inputs(&runtime, &SdlRuntime::inputEvent);
+    api.events.push_back({SdlApi::EventType::GamepadAdded, 7});
+    api.events.push_back({SdlApi::EventType::ButtonDown, 7, SdlApi::Button::South});
+    bool returnedFromNestedPump = false;
+    QObject::connect(&runtime, &SdlRuntime::inputEvent, &runtime, [&](InputEvent event) {
+        if (event.phase == InputPhase::Pressed) {
+            api.events.push_back({SdlApi::EventType::GamepadRemoved, 7});
+            runtime.pump();
+            returnedFromNestedPump = api.closed.empty();
+        }
+    });
+    runtime.pump();
+    QVERIFY(returnedFromNestedPump);
+    QCOMPARE(inputs.size(), 2);
+    QCOMPARE(api.closed, std::vector<int>{7});
+    QCOMPARE(inputs.at(1).at(0).value<InputEvent>().phase, InputPhase::Released);
+}
+
+void SdlRuntimeTest::reentrantPumpDuringOpenAndCloseKeepsEventOrder() {
+    FakeSdlApi api;
+    api.kinds = {{7, InputDeviceKind::Xbox}, {8, InputDeviceKind::PlayStation}};
+    SdlRuntime runtime(api);
+    QSignalSpy inputs(&runtime, &SdlRuntime::inputEvent);
+    bool openReturnedBeforeButton = false;
+    bool closeReturnedBeforeNextAdd = false;
+    api.onOpen = [&] {
+        if (api.opened.back() == 7) {
+            runtime.pump();
+            openReturnedBeforeButton = inputs.empty();
+        }
+    };
+    api.onClose = [&] {
+        runtime.pump();
+        closeReturnedBeforeNextAdd = api.opened.size() == 1;
+    };
+    api.events.push_back({SdlApi::EventType::GamepadAdded, 7});
+    api.events.push_back({SdlApi::EventType::ButtonDown, 7, SdlApi::Button::South});
+    api.events.push_back({SdlApi::EventType::GamepadRemoved, 7});
+    api.events.push_back({SdlApi::EventType::GamepadAdded, 8});
+    runtime.pump();
+    QVERIFY(openReturnedBeforeButton);
+    QVERIFY(closeReturnedBeforeNextAdd);
+    QCOMPARE(inputs.size(), 2);
+    QCOMPARE(api.opened, (std::vector<int>{7, 8}));
+    api.onOpen = {};
+    api.onClose = {};
+}
+
+void SdlRuntimeTest::destructionWaitsForInFlightAudioSubmission() {
+    BlockingAudioApi api;
+    auto runtime = std::make_unique<SdlRuntime>(api);
+    auto* raw = runtime.get();
+    std::thread submitter([raw] { raw->submitAudio(std::vector<std::int16_t>{1, 2}); });
+    {
+        std::unique_lock lock(api.mutex);
+        api.condition.wait(lock, [&] { return api.inPut; });
+    }
+    std::atomic<bool> destructionStarted{false};
+    std::thread destroyer([&] {
+        destructionStarted.store(true);
+        runtime.reset();
+    });
+    while (!destructionStarted.load()) std::this_thread::yield();
+    {
+        std::unique_lock lock(api.mutex);
+        api.condition.wait_for(lock, std::chrono::milliseconds(100), [&] { return api.shutdownEntered; });
+        api.releasePut = true;
+        api.condition.notify_all();
+    }
+    submitter.join();
+    destroyer.join();
+    QVERIFY(!api.shutdownOverlappedPut);
+    QCOMPARE(api.shutdownCount, 1);
 }
 
 QTEST_MAIN(SdlRuntimeTest)

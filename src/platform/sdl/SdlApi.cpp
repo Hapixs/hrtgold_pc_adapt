@@ -2,8 +2,11 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
-#include <limits>
 #include <map>
 
 struct Sdl3Api::Impl {
@@ -111,10 +114,39 @@ bool Sdl3Api::putAudio(std::span<const std::int16_t> samples) {
     if (!impl_->audio) return false;
     constexpr int maxBytes = 48000 * 2 * sizeof(std::int16_t) / 4;
     const auto bytes = samples.size_bytes();
-    if (bytes > static_cast<std::size_t>(maxBytes) || bytes > static_cast<std::size_t>(std::numeric_limits<int>::max())) return false;
-    const auto queued = SDL_GetAudioStreamQueued(impl_->audio);
+    if (samples.size() % 2 != 0 || bytes > static_cast<std::size_t>(maxBytes)) return false;
+    const int headroom = maxBytes - static_cast<int>(bytes);
+    int queued = SDL_GetAudioStreamQueued(impl_->audio);
     if (queued < 0) return false;
-    if (queued + static_cast<int>(bytes) > maxBytes && !SDL_ClearAudioStream(impl_->audio)) return false;
+    if (queued > headroom) {
+        SDL_AudioSpec output{};
+        if (!SDL_GetAudioStreamFormat(impl_->audio, nullptr, &output) ||
+            output.freq <= 0 || output.channels <= 0 || SDL_AUDIO_BYTESIZE(output.format) == 0) return false;
+        const int outputFrameBytes = SDL_AUDIO_BYTESIZE(output.format) * output.channels;
+        std::array<std::byte, 4096> discarded{};
+        if (outputFrameBytes > static_cast<int>(discarded.size())) return false;
+        int stalledReads = 0;
+        while (queued > headroom) {
+            const int excessInputFrames = (queued - headroom + 3) / 4;
+            const auto outputFrames = (static_cast<std::int64_t>(excessInputFrames) * output.freq + 47999) / 48000;
+            const int requestFrames = static_cast<int>(std::min<std::int64_t>(
+                std::max<std::int64_t>(outputFrames, 1), discarded.size() / outputFrameBytes));
+            const int drained = SDL_GetAudioStreamData(impl_->audio, discarded.data(), requestFrames * outputFrameBytes);
+            if (drained <= 0) {
+                // A stalled or failed drain must not leave an unbounded backlog.
+                SDL_ClearAudioStream(impl_->audio);
+                return false;
+            }
+            const int nextQueued = SDL_GetAudioStreamQueued(impl_->audio);
+            if (nextQueued < 0 || nextQueued > queued ||
+                (nextQueued == queued && ++stalledReads >= 16)) {
+                SDL_ClearAudioStream(impl_->audio);
+                return false;
+            }
+            if (nextQueued < queued) stalledReads = 0;
+            queued = nextQueued;
+        }
+    }
     return SDL_PutAudioStreamData(impl_->audio, samples.data(), static_cast<int>(bytes));
 }
 
