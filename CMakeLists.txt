@@ -34,6 +34,14 @@ target_link_libraries(heartgold_pc PRIVATE
     SDL3::SDL3
 )
 
+add_library(heartgold_sdl STATIC
+    src/platform/sdl/SdlApi.cpp
+    src/platform/sdl/SdlRuntime.cpp
+)
+target_include_directories(heartgold_sdl PUBLIC src)
+target_link_libraries(heartgold_sdl PUBLIC Qt6::Core SDL3::SDL3)
+target_link_libraries(heartgold_pc PRIVATE heartgold_sdl)
+
 qt_add_executable(tst_bootstrap
     tests/smoke/tst_bootstrap.cpp
 )
@@ -82,3 +90,11 @@ qt_add_executable(tst_input_router
 target_link_libraries(tst_input_router PRIVATE heartgold_core Qt6::Core Qt6::Test)
 
 add_test(NAME tst_input_router COMMAND tst_input_router)
+
+qt_add_executable(tst_sdl_runtime
+    tests/platform/tst_sdl_runtime.cpp
+    src/platform/sdl/SdlRuntime.cpp
+)
+target_include_directories(tst_sdl_runtime PRIVATE src)
+target_link_libraries(tst_sdl_runtime PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME tst_sdl_runtime COMMAND tst_sdl_runtime)
