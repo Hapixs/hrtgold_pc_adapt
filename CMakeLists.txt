@@ -13,7 +13,9 @@ find_package(SDL3 3.2 REQUIRED CONFIG)
 add_compile_definitions(HEARTGOLD_PC_APP_NAME="HeartGold PC Remastered")
 
 add_library(heartgold_core STATIC
+    src/core/input/InputRouter.cpp
     src/core/rom/RomValidator.cpp
+    src/core/session/SessionController.cpp
     src/core/storage/AppPaths.cpp
     src/core/storage/SaveRepository.cpp
     src/emulation/fake/FakeEmulatorCore.cpp
@@ -66,3 +68,17 @@ qt_add_executable(tst_fake_emulator
 target_link_libraries(tst_fake_emulator PRIVATE heartgold_core Qt6::Core Qt6::Test)
 
 add_test(NAME tst_fake_emulator COMMAND tst_fake_emulator)
+
+qt_add_executable(tst_session_controller
+    tests/core/tst_session_controller.cpp
+)
+target_link_libraries(tst_session_controller PRIVATE heartgold_core Qt6::Core Qt6::Test)
+
+add_test(NAME tst_session_controller COMMAND tst_session_controller)
+
+qt_add_executable(tst_input_router
+    tests/core/tst_input_router.cpp
+)
+target_link_libraries(tst_input_router PRIVATE heartgold_core Qt6::Core Qt6::Test)
+
+add_test(NAME tst_input_router COMMAND tst_input_router)
