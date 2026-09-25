@@ -35,6 +35,7 @@ target_link_libraries(heartgold_pc PRIVATE
 )
 
 add_library(heartgold_sdl STATIC
+    src/platform/sdl/SdlAudioSink.cpp
     src/platform/sdl/SdlApi.cpp
     src/platform/sdl/SdlRuntime.cpp
 )
@@ -93,6 +94,7 @@ add_test(NAME tst_input_router COMMAND tst_input_router)
 
 qt_add_executable(tst_sdl_runtime
     tests/platform/tst_sdl_runtime.cpp
+    src/platform/sdl/SdlAudioSink.cpp
     src/platform/sdl/SdlRuntime.cpp
 )
 target_include_directories(tst_sdl_runtime PRIVATE src)

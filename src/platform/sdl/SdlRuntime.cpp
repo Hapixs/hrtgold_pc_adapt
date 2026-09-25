@@ -1,14 +1,9 @@
 #include "platform/sdl/SdlRuntime.h"
 
-#include <algorithm>
-#include <cmath>
 #include <QMetaObject>
 #include <QScopedValueRollback>
-#include <vector>
 
 namespace {
-constexpr std::size_t maxAudioSamples = 48000 * 2 / 4;
-
 std::size_t actionIndex(InputAction action) {
     switch (action) {
     case InputAction::MoveUp: return 0;
@@ -49,8 +44,9 @@ SdlRuntime::SdlRuntime(SdlApi& api, QObject* parent) : QObject(parent), api_(api
     qRegisterMetaType<InputEvent>();
     qRegisterMetaType<InputDeviceKind>();
     initialized_ = api_.init();
-    if (initialized_) audioAvailable_ = api_.openAudioStream();
-    if (!initialized_ || !audioAvailable_) {
+    const bool audioAvailable = initialized_ && api_.openAudioStream();
+    audioSink_ = std::make_shared<SdlAudioSink>(api_, audioAvailable);
+    if (!initialized_ || !audioAvailable) {
         const auto message = initialized_ ? QStringLiteral("SDL audio is unavailable") :
                                             QStringLiteral("SDL input initialization failed");
         QMetaObject::invokeMethod(this, [this, message] { emit audioError(message); }, Qt::QueuedConnection);
@@ -59,15 +55,15 @@ SdlRuntime::SdlRuntime(SdlApi& api, QObject* parent) : QObject(parent), api_(api
 
 SdlRuntime::~SdlRuntime() {
     for (const auto& [id, unused] : gamepads_) api_.closeGamepad(id);
-    std::lock_guard lock(audioMutex_);
-    audioShuttingDown_ = true;
-    audioAvailable_.store(false);
-    api_.shutdown();
+    audioSink_->shutdownApi();
+    audioSink_.reset();
 }
 
 void SdlRuntime::pump() {
-    if (!initialized_ || pumping_) return;
+    if (pumping_) return;
     QScopedValueRollback guard(pumping_, true);
+    if (audioSink_->takeSubmissionError()) emit audioError(QStringLiteral("SDL audio submission failed"));
+    if (!initialized_) return;
     while (const auto event = api_.pollEvent()) handle(*event);
 }
 
@@ -168,30 +164,5 @@ void SdlRuntime::handle(const SdlApi::Event& event) {
 }
 
 void SdlRuntime::setVolume(float volume) noexcept {
-    volume_.store(std::isfinite(volume) ? std::clamp(volume, 0.0f, 1.0f) : 0.0f);
-}
-
-void SdlRuntime::submitAudio(std::span<const std::int16_t> samples) {
-    if (!audioAvailable_.load() || samples.empty()) return;
-    const auto completeFrames = samples.first(samples.size() / 2 * 2);
-    const auto count = std::min(completeFrames.size(), maxAudioSamples);
-    if (count == 0) return;
-    const auto tail = completeFrames.last(count);
-    const auto volume = volume_.load();
-    std::vector<std::int16_t> scaled;
-    scaled.reserve(count);
-    for (const auto sample : tail) {
-        const auto value = static_cast<int>(std::lround(static_cast<float>(sample) * volume));
-        scaled.push_back(static_cast<std::int16_t>(std::clamp(value, -32768, 32767)));
-    }
-    {
-        std::lock_guard lock(audioMutex_);
-        if (audioShuttingDown_ || !audioAvailable_.load()) return;
-        if (!api_.putAudio(scaled)) {
-            audioAvailable_.store(false);
-            QMetaObject::invokeMethod(this, [this] {
-                emit audioError(QStringLiteral("SDL audio submission failed"));
-            }, Qt::QueuedConnection);
-        }
-    }
+    audioSink_->setVolume(volume);
 }

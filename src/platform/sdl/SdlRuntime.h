@@ -1,16 +1,14 @@
 #pragma once
 
-#include "platform/sdl/SdlApi.h"
+#include "platform/sdl/SdlAudioSink.h"
 
 #include <QObject>
 #include <QString>
 
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <map>
-#include <mutex>
-#include <span>
+#include <memory>
 
 Q_DECLARE_METATYPE(InputEvent)
 Q_DECLARE_METATYPE(InputDeviceKind)
@@ -22,9 +20,9 @@ public:
     ~SdlRuntime() override;
 
     void pump();
-    void submitAudio(std::span<const std::int16_t> samples);
+    std::shared_ptr<SdlAudioSink> audioSink() const noexcept { return audioSink_; }
     void setVolume(float volume) noexcept;
-    bool audioAvailable() const noexcept { return audioAvailable_.load(); }
+    bool audioAvailable() const noexcept { return audioSink_->audioAvailable(); }
     InputDeviceKind activeDevice() const noexcept { return activeDevice_; }
 
 signals:
@@ -50,9 +48,6 @@ private:
     InputDeviceKind activeDevice_{InputDeviceKind::Keyboard};
     int activeId_{-1};
     bool pumping_{false};
-    std::atomic<float> volume_{1.0f};
-    std::atomic<bool> audioAvailable_{false};
-    std::mutex audioMutex_;
-    bool audioShuttingDown_{false};
+    std::shared_ptr<SdlAudioSink> audioSink_;
     bool initialized_{false};
 };

@@ -1,4 +1,5 @@
 #include "platform/sdl/SdlRuntime.h"
+#include "platform/sdl/SdlAudioQueue.h"
 
 #include <QSignalSpy>
 #include <QTest>
@@ -33,13 +34,20 @@ public:
     void closeGamepad(int id) override { closed.push_back(id); if (onClose) onClose(); }
     bool openAudioStream() override { ++audioOpenCount; return audioSucceeds; }
     bool putAudio(std::span<const std::int16_t> samples) override {
+        return sdl_audio::submitBoundedAudio(*this, samples);
+    }
+    int queuedBytes() const { return static_cast<int>(queued.size() * sizeof(std::int16_t)); }
+    int drainOldestFrames(int frames) {
+        if (zeroOutputDrain) return 0;
+        const auto discarded = std::min<std::size_t>(queued.size(), static_cast<std::size_t>(frames) * 2);
+        queued.erase(queued.begin(), queued.begin() + discarded);
+        return static_cast<int>(discarded * sizeof(std::int16_t));
+    }
+    bool clearQueued() { ++clearCount; queued.clear(); return true; }
+    bool putAudioSamples(std::span<const std::int16_t> samples) {
         submitted.assign(samples.begin(), samples.end());
         if (!putSucceeds) return false;
         queued.insert(queued.end(), samples.begin(), samples.end());
-        constexpr std::size_t maxSamples = 48000 * 2 / 4;
-        if (queued.size() > maxSamples) {
-            queued.erase(queued.begin(), queued.begin() + (queued.size() - maxSamples));
-        }
         return true;
     }
     void shutdown() override { ++shutdownCount; }
@@ -47,6 +55,8 @@ public:
     bool initSucceeds{true};
     bool audioSucceeds{true};
     bool putSucceeds{true};
+    bool zeroOutputDrain{false};
+    int clearCount{0};
     int initCount{0};
     int audioOpenCount{0};
     int shutdownCount{0};
@@ -114,6 +124,8 @@ private slots:
     void reentrantPumpDefersRemovalUntilInputSignalReturns();
     void reentrantPumpDuringOpenAndCloseKeepsEventOrder();
     void destructionWaitsForInFlightAudioSubmission();
+    void heldAudioSinkRemainsSafeAfterRuntimeDestruction();
+    void zeroOutputDrainKeepsNewestChunkAndAudioAvailable();
 };
 
 void SdlRuntimeTest::ownsInitAndShutdown() {
@@ -127,7 +139,7 @@ void SdlRuntimeTest::audioFailureIsNonfatal() {
     api.audioSucceeds = false;
     SdlRuntime runtime(api);
     QVERIFY(!runtime.audioAvailable());
-    runtime.submitAudio(std::vector<std::int16_t>{1, 2});
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>{1, 2});
     QVERIFY(api.submitted.empty());
     api.kinds[12] = InputDeviceKind::Xbox;
     api.events.push_back({SdlApi::EventType::GamepadAdded, 12});
@@ -251,7 +263,7 @@ void SdlRuntimeTest::audioDropsOldestSamplesAtQuarterSecond() {
     SdlRuntime runtime(api);
     std::vector<std::int16_t> samples(96000 * 2, 7);
     samples.back() = 42;
-    runtime.submitAudio(samples);
+    runtime.audioSink()->submitAudio(samples);
     QCOMPARE(api.submitted.size(), std::size_t{24000});
     QCOMPARE(api.submitted.back(), std::int16_t{42});
 }
@@ -259,7 +271,7 @@ void SdlRuntimeTest::audioDropsOldestSamplesAtQuarterSecond() {
 void SdlRuntimeTest::audioDropsIncompleteStereoFrameWithoutShiftingChannels() {
     FakeSdlApi api;
     SdlRuntime runtime(api);
-    runtime.submitAudio(std::vector<std::int16_t>{10, 20, 30, 40, 50});
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>{10, 20, 30, 40, 50});
     QCOMPARE(api.submitted, (std::vector<std::int16_t>{10, 20, 30, 40}));
 }
 
@@ -267,13 +279,13 @@ void SdlRuntimeTest::volumeClampsAndMuteSilences() {
     FakeSdlApi api;
     SdlRuntime runtime(api);
     runtime.setVolume(2.0f);
-    runtime.submitAudio(std::vector<std::int16_t>{32767, -32768});
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>{32767, -32768});
     QCOMPARE(api.submitted, (std::vector<std::int16_t>{32767, -32768}));
     runtime.setVolume(-1.0f);
-    runtime.submitAudio(std::vector<std::int16_t>{1234, -1234});
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>{1234, -1234});
     QCOMPARE(api.submitted, (std::vector<std::int16_t>{0, 0}));
     runtime.setVolume(0.5f);
-    runtime.submitAudio(std::vector<std::int16_t>{2000, -2000});
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>{2000, -2000});
     QCOMPARE(api.submitted, (std::vector<std::int16_t>{1000, -1000}));
 }
 
@@ -282,9 +294,9 @@ void SdlRuntimeTest::failedSubmissionDisablesAudio() {
     SdlRuntime runtime(api);
     QSignalSpy errors(&runtime, &SdlRuntime::audioError);
     api.putSucceeds = false;
-    runtime.submitAudio(std::vector<std::int16_t>{1, 2});
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>{1, 2});
     QVERIFY(!runtime.audioAvailable());
-    QCoreApplication::processEvents();
+    runtime.pump();
     QCOMPARE(errors.size(), 1);
 }
 
@@ -313,8 +325,8 @@ void SdlRuntimeTest::audioQueueRetainsNewestQuarterSecondAcrossSubmissions() {
     std::vector<std::int16_t> first(48000 * 2 * 240 / 1000, 1);
     std::fill(first.end() - 960, first.end(), 2);
     const std::vector<std::int16_t> second(48000 * 2 * 20 / 1000, 3);
-    runtime.submitAudio(first);
-    runtime.submitAudio(second);
+    runtime.audioSink()->submitAudio(first);
+    runtime.audioSink()->submitAudio(second);
     QCOMPARE(api.queued.size(), std::size_t{24000});
     QCOMPARE(api.queued.front(), std::int16_t{1});
     QCOMPARE(api.queued.at(24000 - 960 - second.size()), std::int16_t{2});
@@ -376,8 +388,8 @@ void SdlRuntimeTest::reentrantPumpDuringOpenAndCloseKeepsEventOrder() {
 void SdlRuntimeTest::destructionWaitsForInFlightAudioSubmission() {
     BlockingAudioApi api;
     auto runtime = std::make_unique<SdlRuntime>(api);
-    auto* raw = runtime.get();
-    std::thread submitter([raw] { raw->submitAudio(std::vector<std::int16_t>{1, 2}); });
+    auto sink = runtime->audioSink();
+    std::thread submitter([sink] { sink->submitAudio(std::vector<std::int16_t>{1, 2}); });
     {
         std::unique_lock lock(api.mutex);
         api.condition.wait(lock, [&] { return api.inPut; });
@@ -398,6 +410,51 @@ void SdlRuntimeTest::destructionWaitsForInFlightAudioSubmission() {
     destroyer.join();
     QVERIFY(!api.shutdownOverlappedPut);
     QCOMPARE(api.shutdownCount, 1);
+}
+
+void SdlRuntimeTest::heldAudioSinkRemainsSafeAfterRuntimeDestruction() {
+    FakeSdlApi api;
+    auto runtime = std::make_unique<SdlRuntime>(api);
+    auto sink = runtime->audioSink();
+    std::mutex gateMutex;
+    std::condition_variable gate;
+    bool paused = false;
+    bool resume = false;
+    std::thread submitter([sink, &gateMutex, &gate, &paused, &resume] {
+        {
+            std::unique_lock lock(gateMutex);
+            paused = true;
+            gate.notify_all();
+            gate.wait(lock, [&] { return resume; });
+        }
+        sink->submitAudio(std::vector<std::int16_t>{1, 2});
+    });
+    {
+        std::unique_lock lock(gateMutex);
+        gate.wait(lock, [&] { return paused; });
+    }
+    runtime.reset();
+    {
+        std::lock_guard lock(gateMutex);
+        resume = true;
+    }
+    gate.notify_all();
+    submitter.join();
+    QVERIFY(!sink->audioAvailable());
+    QVERIFY(api.submitted.empty());
+    QCOMPARE(api.shutdownCount, 1);
+}
+
+void SdlRuntimeTest::zeroOutputDrainKeepsNewestChunkAndAudioAvailable() {
+    FakeSdlApi api;
+    api.zeroOutputDrain = true;
+    SdlRuntime runtime(api);
+    runtime.audioSink()->submitAudio(std::vector<std::int16_t>(48000 * 2 * 240 / 1000, 1));
+    const std::vector<std::int16_t> newest(24000, 7);
+    runtime.audioSink()->submitAudio(newest);
+    QVERIFY(runtime.audioAvailable());
+    QCOMPARE(api.queued, newest);
+    QCOMPARE(api.clearCount, 1);
 }
 
 QTEST_MAIN(SdlRuntimeTest)
