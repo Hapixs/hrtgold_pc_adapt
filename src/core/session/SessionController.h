@@ -30,6 +30,8 @@ private:
     std::unique_ptr<EmulatorCore> core_;
     std::thread::id owningThread_;
     SessionState state_{SessionState::NoRom};
+    bool coreMayNeedStop_{false};
+    bool acceptsDsInput_{false};
     std::function<void(SessionState)> stateChangedCallback_;
     std::function<void(const EmulationResult&)> errorCallback_;
 };

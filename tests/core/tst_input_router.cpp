@@ -52,6 +52,27 @@ private slots:
         QCOMPARE(left.dsMask, toMask(DsButton::Left));
     }
 
+    void keepsAButtonHeldUntilEveryDeviceReleasesIt() {
+        InputRouter router;
+        const auto keyboardDown = router.route(
+            {InputAction::MoveUp, InputPhase::Pressed, InputDeviceKind::Keyboard},
+            SessionState::Playing);
+        const auto xboxDown = router.route(
+            {InputAction::MoveUp, InputPhase::Pressed, InputDeviceKind::Xbox},
+            SessionState::Playing);
+        const auto keyboardUp = router.route(
+            {InputAction::MoveUp, InputPhase::Released, InputDeviceKind::Keyboard},
+            SessionState::Playing);
+        const auto xboxUp = router.route(
+            {InputAction::MoveUp, InputPhase::Released, InputDeviceKind::Xbox},
+            SessionState::Playing);
+
+        QCOMPARE(keyboardDown.dsMask, toMask(DsButton::Up));
+        QCOMPARE(xboxDown.dsMask, toMask(DsButton::Up));
+        QCOMPARE(keyboardUp.dsMask, toMask(DsButton::Up));
+        QCOMPARE(xboxUp.dsMask, DsButtonMask{0});
+    }
+
     void mapsConfirmAndBackToDsButtonsWhilePlaying() {
         InputRouter router;
 
@@ -93,13 +114,16 @@ private slots:
 
     void menuContextClearsHeldDsStateWithoutLeakingAButtonDecision() {
         InputRouter router;
+        router.synchronizeSessionState(SessionState::Playing);
         router.route({InputAction::MoveLeft, InputPhase::Pressed,
                       InputDeviceKind::Keyboard},
                      SessionState::Playing);
 
+        router.synchronizeSessionState(SessionState::MenuOpen);
         const auto overlay = router.route(
             {InputAction::MoveUp, InputPhase::Pressed, InputDeviceKind::Xbox},
             SessionState::MenuOpen);
+        router.synchronizeSessionState(SessionState::Playing);
         const auto resumed = router.route(
             {InputAction::MoveDown, InputPhase::Pressed, InputDeviceKind::Keyboard},
             SessionState::Playing);
@@ -107,6 +131,22 @@ private slots:
         QCOMPARE(overlay.target, RouteTarget::Overlay);
         QCOMPARE(overlay.dsMask, DsButtonMask{0});
         QCOMPARE(resumed.dsMask, toMask(DsButton::Down));
+    }
+
+    void explicitSessionSynchronizationClearsAnUnseenMenuRoundTrip() {
+        InputRouter router;
+        router.synchronizeSessionState(SessionState::Playing);
+        router.route({InputAction::MoveLeft, InputPhase::Pressed,
+                      InputDeviceKind::Keyboard},
+                     SessionState::Playing);
+
+        router.synchronizeSessionState(SessionState::MenuOpen);
+        router.synchronizeSessionState(SessionState::Playing);
+        const auto nextPress = router.route(
+            {InputAction::MoveDown, InputPhase::Pressed, InputDeviceKind::Keyboard},
+            SessionState::Playing);
+
+        QCOMPARE(nextPress.dsMask, toMask(DsButton::Down));
     }
 
     void openMenuTogglesCloseWhileTheOverlayIsOpen() {

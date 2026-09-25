@@ -10,21 +10,29 @@ SessionController::SessionController(std::unique_ptr<EmulatorCore> core)
 
 EmulationResult SessionController::load(const EmulationConfig& config) {
     assertOwningThread();
-    if (state_ != SessionState::NoRom) {
+    const auto canRetryInactiveLoad =
+        state_ == SessionState::Error && !coreMayNeedStop_;
+    if (state_ != SessionState::NoRom && !canRetryInactiveLoad) {
         return rejected("A ROM can be loaded only when no session is active.");
     }
 
+    acceptsDsInput_ = false;
     publishState(SessionState::Loading);
     auto result = core_->load(config);
     if (!result.ok()) {
+        coreMayNeedStop_ = false;
         return publishCoreError(result);
     }
 
+    // A failed start may have created worker-owned resources. Require an explicit
+    // successful stop before another load, even when start reports failure.
+    coreMayNeedStop_ = true;
     result = core_->start();
     if (!result.ok()) {
         return publishCoreError(result);
     }
 
+    acceptsDsInput_ = true;
     publishState(SessionState::Playing);
     return result;
 }
@@ -35,6 +43,7 @@ EmulationResult SessionController::openMenu() {
         return rejected("The menu can be opened only while a session is playing.");
     }
 
+    acceptsDsInput_ = false;
     core_->setButtons(0);
     const auto result = core_->pause();
     if (!result.ok()) {
@@ -57,16 +66,21 @@ EmulationResult SessionController::closeMenu() {
         return publishCoreError(result);
     }
 
+    acceptsDsInput_ = true;
     publishState(SessionState::Playing);
     return result;
 }
 
 EmulationResult SessionController::stop() {
     assertOwningThread();
-    if (state_ != SessionState::Playing && state_ != SessionState::MenuOpen) {
+    const auto canCleanUpError =
+        state_ == SessionState::Error && coreMayNeedStop_;
+    if (state_ != SessionState::Playing && state_ != SessionState::MenuOpen &&
+        !canCleanUpError) {
         return rejected("A session can be stopped only while playing or paused.");
     }
 
+    acceptsDsInput_ = false;
     publishState(SessionState::Stopping);
     core_->setButtons(0);
     const auto result = core_->stop();
@@ -74,13 +88,14 @@ EmulationResult SessionController::stop() {
         return publishCoreError(result);
     }
 
+    coreMayNeedStop_ = false;
     publishState(SessionState::NoRom);
     return result;
 }
 
 void SessionController::setDsButtons(DsButtonMask pressed) {
     assertOwningThread();
-    if (state_ == SessionState::Playing) {
+    if (state_ == SessionState::Playing && acceptsDsInput_) {
         core_->setButtons(pressed);
     }
 }

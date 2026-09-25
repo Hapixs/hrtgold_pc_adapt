@@ -1,5 +1,7 @@
 #include "core/input/InputRouter.h"
 
+#include <cstddef>
+
 namespace {
 DsButtonMask dsButtonFor(InputAction action) noexcept {
     switch (action) {
@@ -47,13 +49,29 @@ bool suppressesRepeat(InputAction action) noexcept {
     return action == InputAction::OpenMenu || action == InputAction::Back ||
            action == InputAction::Confirm;
 }
+
+std::size_t deviceIndex(InputDeviceKind device) noexcept {
+    switch (device) {
+    case InputDeviceKind::Keyboard:
+        return 0;
+    case InputDeviceKind::Xbox:
+        return 1;
+    case InputDeviceKind::PlayStation:
+        return 2;
+    case InputDeviceKind::GenericGamepad:
+        return 3;
+    }
+    return 0;
+}
 } // namespace
 
-RouteDecision InputRouter::route(const InputEvent& event, SessionState state) {
+void InputRouter::synchronizeSessionState(SessionState state) noexcept {
     if (state != SessionState::Playing) {
-        heldMask_ = 0;
+        clearHeldButtons();
     }
+}
 
+RouteDecision InputRouter::route(const InputEvent& event, SessionState state) {
     if (event.repeated && suppressesRepeat(event.action)) {
         return {};
     }
@@ -68,7 +86,7 @@ RouteDecision InputRouter::route(const InputEvent& event, SessionState state) {
     if (state == SessionState::Playing) {
         if (event.action == InputAction::OpenMenu) {
             if (event.phase == InputPhase::Pressed) {
-                heldMask_ = 0;
+                clearHeldButtons();
                 return {RouteTarget::Application, UiCommand::OpenMenu, 0};
             }
             return {};
@@ -78,12 +96,13 @@ RouteDecision InputRouter::route(const InputEvent& event, SessionState state) {
         if (button == 0) {
             return {};
         }
+        auto& deviceMask = heldMasks_[deviceIndex(event.device)];
         if (event.phase == InputPhase::Pressed) {
-            heldMask_ = static_cast<DsButtonMask>(heldMask_ | button);
+            deviceMask = static_cast<DsButtonMask>(deviceMask | button);
         } else {
-            heldMask_ = static_cast<DsButtonMask>(heldMask_ & ~button);
+            deviceMask = static_cast<DsButtonMask>(deviceMask & ~button);
         }
-        return {RouteTarget::Emulator, UiCommand::None, heldMask_};
+        return {RouteTarget::Emulator, UiCommand::None, combinedMask()};
     }
 
     if (state == SessionState::MenuOpen && event.phase == InputPhase::Pressed) {
@@ -97,4 +116,16 @@ RouteDecision InputRouter::route(const InputEvent& event, SessionState state) {
     }
 
     return {};
+}
+
+DsButtonMask InputRouter::combinedMask() const noexcept {
+    DsButtonMask combined = 0;
+    for (const auto mask : heldMasks_) {
+        combined = static_cast<DsButtonMask>(combined | mask);
+    }
+    return combined;
+}
+
+void InputRouter::clearHeldButtons() noexcept {
+    heldMasks_.fill(0);
 }

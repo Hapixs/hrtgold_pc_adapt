@@ -190,6 +190,24 @@ private slots:
         QCOMPARE(errors.size(), std::size_t{1});
     }
 
+    void loadFailureWithoutAnActiveCoreAllowsAnotherLoadAttempt() {
+        auto core = std::make_unique<ProbeEmulatorCore>();
+        auto* observed = core.get();
+        core->loadResult = EmulationResult{EmulationErrorCode::InvalidRom, "bad ROM"};
+        SessionController session(std::move(core));
+        int errorCount = 0;
+        session.onError([&](const EmulationResult&) { ++errorCount; });
+        QVERIFY(!session.load(validConfig()).ok());
+        observed->loadResult = {};
+
+        QVERIFY(session.load(validConfig()).ok());
+
+        QCOMPARE(session.state(), SessionState::Playing);
+        QCOMPARE(errorCount, 1);
+        QCOMPARE(observed->calls, std::vector<std::string>({"load", "load", "start"}));
+        QVERIFY(session.stop().ok());
+    }
+
     void startFailurePublishesErrorExactlyOnce() {
         auto core = std::make_unique<ProbeEmulatorCore>();
         core->startResult = failure("start failed");
@@ -201,6 +219,20 @@ private slots:
 
         QCOMPARE(session.state(), SessionState::Error);
         QCOMPARE(errorCount, 1);
+    }
+
+    void startFailureAllowsConservativeStopCleanup() {
+        auto core = std::make_unique<ProbeEmulatorCore>();
+        auto* observed = core.get();
+        core->startResult = failure("start failed");
+        SessionController session(std::move(core));
+        QVERIFY(!session.load(validConfig()).ok());
+
+        QVERIFY(session.stop().ok());
+
+        QCOMPARE(session.state(), SessionState::NoRom);
+        QCOMPARE(observed->calls,
+                 std::vector<std::string>({"load", "start", "buttons:0", "stop"}));
     }
 
     void pauseFailurePublishesErrorExactlyOnce() {
@@ -220,6 +252,36 @@ private slots:
         QCOMPARE(observed->buttonHistory.back(), DsButtonMask{0});
     }
 
+    void pauseFailureAllowsStopCleanup() {
+        auto core = std::make_unique<ProbeEmulatorCore>();
+        auto* observed = core.get();
+        core->pauseResult = failure("pause failed");
+        SessionController session(std::move(core));
+        QVERIFY(session.load(validConfig()).ok());
+        QVERIFY(!session.openMenu().ok());
+
+        QVERIFY(session.stop().ok());
+
+        QCOMPARE(session.state(), SessionState::NoRom);
+        QCOMPARE(observed->calls.back(), std::string("stop"));
+    }
+
+    void reentrantInputCannotUndoNeutralizationDuringPause() {
+        auto core = std::make_unique<ProbeEmulatorCore>();
+        auto* observed = core.get();
+        SessionController session(std::move(core));
+        QVERIFY(session.load(validConfig()).ok());
+        session.setDsButtons(toMask(DsButton::Right));
+        observed->duringPause = [&] { session.setDsButtons(toMask(DsButton::A)); };
+
+        QVERIFY(session.openMenu().ok());
+
+        QCOMPARE(observed->buttonHistory,
+                 std::vector<DsButtonMask>({toMask(DsButton::Right), 0}));
+        QVERIFY(session.closeMenu().ok());
+        QVERIFY(session.stop().ok());
+    }
+
     void resumeFailurePublishesErrorExactlyOnce() {
         auto core = std::make_unique<ProbeEmulatorCore>();
         auto* observed = core.get();
@@ -235,6 +297,21 @@ private slots:
         QCOMPARE(session.state(), SessionState::Error);
         QCOMPARE(errorCount, 1);
         QCOMPARE(observed->buttonHistory.back(), DsButtonMask{0});
+    }
+
+    void resumeFailureAllowsStopCleanup() {
+        auto core = std::make_unique<ProbeEmulatorCore>();
+        auto* observed = core.get();
+        core->resumeResult = failure("resume failed");
+        SessionController session(std::move(core));
+        QVERIFY(session.load(validConfig()).ok());
+        QVERIFY(session.openMenu().ok());
+        QVERIFY(!session.closeMenu().ok());
+
+        QVERIFY(session.stop().ok());
+
+        QCOMPARE(session.state(), SessionState::NoRom);
+        QCOMPARE(observed->calls.back(), std::string("stop"));
     }
 
     void stopFailurePublishesErrorExactlyOnce() {

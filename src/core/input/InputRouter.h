@@ -3,6 +3,8 @@
 #include "core/input/InputTypes.h"
 #include "core/session/SessionController.h"
 
+#include <array>
+
 enum class RouteTarget { None, Emulator, Overlay, Application };
 
 enum class UiCommand {
@@ -26,8 +28,12 @@ struct RouteDecision {
 
 class InputRouter {
 public:
+    void synchronizeSessionState(SessionState state) noexcept;
     RouteDecision route(const InputEvent& event, SessionState state);
 
 private:
-    DsButtonMask heldMask_{0};
+    DsButtonMask combinedMask() const noexcept;
+    void clearHeldButtons() noexcept;
+
+    std::array<DsButtonMask, 4> heldMasks_{};
 };
