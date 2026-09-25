@@ -43,6 +43,22 @@ target_include_directories(heartgold_sdl PUBLIC src)
 target_link_libraries(heartgold_sdl PUBLIC Qt6::Core SDL3::SDL3)
 target_link_libraries(heartgold_pc PRIVATE heartgold_sdl)
 
+add_library(heartgold_app STATIC src/app/AppBootstrap.cpp src/app/AppBootstrap.h)
+target_include_directories(heartgold_app PUBLIC src)
+target_link_libraries(heartgold_app PUBLIC heartgold_sdl heartgold_core heartgold_ui Qt6::Core)
+target_link_libraries(heartgold_pc PRIVATE heartgold_app)
+
+qt_add_resources(heartgold_pc "qml"
+    PREFIX "/HeartGoldPC"
+    BASE "src"
+    FILES
+        src/ui/qml/Main.qml
+        src/ui/qml/WelcomePage.qml
+        src/ui/qml/MainMenu.qml
+        src/ui/qml/OptionsPanel.qml
+        src/ui/qml/components/MenuTile.qml
+)
+
 qt_add_executable(tst_bootstrap
     tests/smoke/tst_bootstrap.cpp
 )
@@ -107,12 +123,32 @@ qt_add_executable(tst_game_surface
 add_library(heartgold_ui STATIC
     src/ui/GameSurface.cpp
     src/ui/GameSurface.h
+    src/ui/UiState.cpp
+    src/ui/UiState.h
 )
 target_include_directories(heartgold_ui PUBLIC src)
-target_link_libraries(heartgold_ui PUBLIC Qt6::Quick)
+target_link_libraries(heartgold_ui PUBLIC heartgold_core Qt6::Quick)
 target_link_libraries(heartgold_pc PRIVATE heartgold_ui)
 target_link_libraries(tst_game_surface PRIVATE heartgold_ui Qt6::Test)
 add_test(NAME tst_game_surface COMMAND tst_game_surface)
 set_tests_properties(tst_game_surface PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
+)
+
+qt_add_executable(tst_ui_state tests/ui/tst_ui_state.cpp)
+target_link_libraries(tst_ui_state PRIVATE heartgold_core heartgold_ui Qt6::Core Qt6::Test)
+add_test(NAME tst_ui_state COMMAND tst_ui_state)
+
+qt_add_executable(tst_qml_main_menu tests/qml/quicktest.cpp)
+target_link_libraries(tst_qml_main_menu PRIVATE Qt6::QuickTest)
+add_test(NAME tst_qml_main_menu COMMAND tst_qml_main_menu -input ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml)
+set_tests_properties(tst_qml_main_menu PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
+)
+
+qt_add_executable(tst_app_bootstrap tests/app/tst_app_bootstrap.cpp)
+target_link_libraries(tst_app_bootstrap PRIVATE heartgold_app Qt6::Test)
+add_test(NAME tst_app_bootstrap COMMAND tst_app_bootstrap)
+set_tests_properties(tst_app_bootstrap PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
 )

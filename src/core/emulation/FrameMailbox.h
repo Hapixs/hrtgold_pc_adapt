@@ -28,7 +28,7 @@ public:
             }
 
             auto expected = std::uint32_t{0};
-            auto& slot = storage_->slots[index];
+            auto& slot = storage_->frameSlots[index];
             if (!slot.state.compare_exchange_strong(expected, kWriterClaim,
                                                     std::memory_order_acq_rel,
                                                     std::memory_order_acquire)) {
@@ -50,7 +50,7 @@ public:
                 return {};
             }
 
-            auto& slot = storage->slots[static_cast<std::size_t>(index)];
+            auto& slot = storage->frameSlots[static_cast<std::size_t>(index)];
             auto state = slot.state.load(std::memory_order_acquire);
             if ((state & kWriterClaim) != 0 || state == kReaderCountMask) {
                 continue;
@@ -87,7 +87,7 @@ private:
     };
 
     struct Storage {
-        std::array<Slot, kSlotCount> slots;
+        std::array<Slot, kSlotCount> frameSlots;
         std::atomic<int> latest{-1};
     };
 
@@ -96,7 +96,7 @@ private:
             : storage(std::move(storage)), index(index) {}
 
         ~ReadLease() {
-            storage->slots[index].state.fetch_sub(1, std::memory_order_release);
+            storage->frameSlots[index].state.fetch_sub(1, std::memory_order_release);
         }
 
         std::shared_ptr<Storage> storage;
