@@ -12,25 +12,15 @@ FocusScope {
     readonly property int tileCount: tiles.count
     readonly property real canvasScale: Math.min(width / 1920, height / 1080)
     signal tileActivated(int index)
-    signal resumeRequested()
+    signal keyRequested(int key, bool pressed, bool repeated)
 
     function tileAt(index) { return tiles.itemAt(index) }
-    function move(horizontal, vertical) {
-        const row = Math.floor(selectedIndex / 4)
-        const column = selectedIndex % 4
-        selectedIndex = ((row + vertical + 2) % 2) * 4 + ((column + horizontal + 4) % 4)
-    }
-
     Keys.onPressed: function(event) {
-        switch (event.key) {
-        case Qt.Key_Left: case Qt.Key_A: move(-1, 0); break
-        case Qt.Key_Right: case Qt.Key_D: move(1, 0); break
-        case Qt.Key_Up: case Qt.Key_W: move(0, -1); break
-        case Qt.Key_Down: case Qt.Key_S: move(0, 1); break
-        case Qt.Key_Return: case Qt.Key_Enter: case Qt.Key_E: tileActivated(selectedIndex); break
-        case Qt.Key_Escape: resumeRequested(); break
-        default: event.accepted = false; return
-        }
+        keyRequested(event.key, true, event.isAutoRepeat)
+        event.accepted = true
+    }
+    Keys.onReleased: function(event) {
+        keyRequested(event.key, false, event.isAutoRepeat)
         event.accepted = true
     }
 
@@ -81,10 +71,7 @@ FocusScope {
                     iconIndex: index
                     selected: menu.selectedIndex === index
                     unavailable: index < 6
-                    onActivated: {
-                        menu.selectedIndex = index
-                        menu.tileActivated(index)
-                    }
+                    onActivated: menu.tileActivated(index)
                 }
             }
         }

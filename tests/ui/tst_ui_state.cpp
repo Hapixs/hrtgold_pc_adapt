@@ -1,7 +1,10 @@
 #include "ui/UiState.h"
 
 #include <QSettings>
+#include <QFile>
+#include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QUrl>
 #include <QtTest>
 
 #include <memory>
@@ -33,6 +36,16 @@ public:
 EmulationConfig fakeConfig() {
     return {std::filesystem::path{L"C:/fake/heartgold.nds"},
             std::filesystem::path{L"C:/fake/save.sav"}, std::string(64, 'a')};
+}
+
+QString validRom(QTemporaryDir& temp) {
+    const auto path = temp.filePath(QStringLiteral("valid.nds"));
+    QByteArray bytes(0x200, '\0');
+    bytes.replace(0x0c, 4, "IPKF");
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()) return {};
+    file.close();
+    return path;
 }
 }
 
@@ -121,6 +134,8 @@ private slots:
         state.setOption(QStringLiteral("reopenLastGame"), false);
         state.setOption(QStringLiteral("lastRomPath"), QStringLiteral("C:/private/game.nds"));
         state.setOption(QStringLiteral("volume"), 500);
+        state.setOption(QStringLiteral("volume"), true);
+        state.setOption(QStringLiteral("volume"), QStringLiteral("72"));
         settings.sync();
         QCOMPARE(state.volume(), 35);
         QVERIFY(state.smoothScaling());
@@ -144,6 +159,169 @@ private slots:
         QVERIFY(state.footerConfirm().contains(QStringLiteral("A")));
         state.setActiveDevice(InputDeviceKind::PlayStation);
         QVERIFY(state.footerConfirm().contains(QStringLiteral("Croix")));
+    }
+
+    void localFileUrlValidatesBeforeLoadingAndRemoteUrlIsRejected() {
+        QTemporaryDir temp;
+        QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
+        auto core = std::make_unique<ProbeCore>();
+        auto* observed = core.get();
+        SessionController session(std::move(core));
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        const auto rom = validRom(temp);
+        QVERIFY(!rom.isEmpty());
+
+        const auto invalidPath = temp.filePath(QStringLiteral("another-game.nds"));
+        QByteArray invalidBytes(0x200, '\0');
+        invalidBytes.replace(0x0c, 4, "ABCD");
+        QFile invalidFile(invalidPath);
+        QVERIFY(invalidFile.open(QIODevice::WriteOnly));
+        QCOMPARE(invalidFile.write(invalidBytes), qint64(invalidBytes.size()));
+        invalidFile.close();
+        state.loadRomUrl(QUrl::fromLocalFile(invalidPath));
+        QCOMPARE(observed->loads, 0);
+        QCOMPARE(state.sessionState(), SessionState::NoRom);
+        QVERIFY(!state.statusMessage().isEmpty());
+
+        state.loadRomUrl(QUrl(QStringLiteral("https://example.invalid/game.nds")));
+        QCOMPARE(observed->loads, 0);
+        QCOMPARE(state.sessionState(), SessionState::NoRom);
+        QVERIFY(!state.statusMessage().isEmpty());
+
+        state.loadRomUrl(QUrl::fromLocalFile(rom));
+        QCOMPARE(observed->loads, 1);
+        QCOMPARE(state.sessionState(), SessionState::Playing);
+        QCOMPARE(observed->loaded.romPath, std::filesystem::path(rom.toStdWString()));
+    }
+
+    void controllerConfirmOnWelcomeRequestsPickerOnce() {
+        QTemporaryDir temp;
+        QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
+        SessionController session(std::make_unique<ProbeCore>());
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        QSignalSpy picker(&state, &UiState::romSelectionRequested);
+
+        state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox});
+        state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox, true});
+
+        QCOMPARE(picker.size(), 1);
+        QCOMPARE(state.activeDevice(), InputDeviceKind::Xbox);
+        QCOMPARE(state.sessionState(), SessionState::NoRom);
+    }
+
+    void keyboardResetsFooterAndUsesRouterRepeatPolicy() {
+        QTemporaryDir temp;
+        QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
+        SessionController session(std::make_unique<ProbeCore>());
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        QVERIFY(session.load(fakeConfig()).ok());
+        QVERIFY(session.openMenu().ok());
+        state.setActiveDevice(InputDeviceKind::Xbox);
+        state.handleKey(Qt::Key_Shift, true);
+        QCOMPARE(state.selectedTile(), 0);
+        QCOMPARE(state.activeDevice(), InputDeviceKind::Keyboard);
+        state.setActiveDevice(InputDeviceKind::Xbox);
+        state.handleKey(Qt::Key_Right, true);
+        QCOMPARE(state.selectedTile(), 1);
+        QCOMPARE(state.activeDevice(), InputDeviceKind::Keyboard);
+        QVERIFY(state.footerConfirm().contains(QStringLiteral("Entrée")));
+        state.setSelectedTile(6);
+        state.handleKey(Qt::Key_Return, true, true);
+        QVERIFY(!state.optionsOpen());
+        state.handleKey(Qt::Key_Return, true);
+        QVERIFY(state.optionsOpen());
+    }
+
+    void controllerNavigatesOptionsAdjustsVolumeAndReturns() {
+        QTemporaryDir temp;
+        QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
+        SessionController session(std::make_unique<ProbeCore>());
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        QVERIFY(session.load(fakeConfig()).ok());
+        QVERIFY(session.openMenu().ok());
+        state.setOption(QStringLiteral("volume"), 98);
+        state.setSelectedTile(6);
+        state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox});
+        QVERIFY(state.optionsOpen());
+        QCOMPARE(state.selectedOption(), 0);
+        state.handleInput({InputAction::MoveRight, InputPhase::Pressed, InputDeviceKind::Xbox});
+        QCOMPARE(state.volume(), 100);
+        state.handleInput({InputAction::MoveLeft, InputPhase::Pressed, InputDeviceKind::Xbox});
+        QCOMPARE(state.volume(), 95);
+        state.handleInput({InputAction::MoveDown, InputPhase::Pressed, InputDeviceKind::Xbox});
+        QCOMPARE(state.selectedOption(), 1);
+        state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox});
+        QVERIFY(state.smoothScaling());
+        state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox, true});
+        QVERIFY(state.smoothScaling());
+        state.handleInput({InputAction::Back, InputPhase::Pressed, InputDeviceKind::Xbox, true});
+        QVERIFY(state.optionsOpen());
+        state.handleInput({InputAction::Back, InputPhase::Pressed, InputDeviceKind::Xbox});
+        QVERIFY(!state.optionsOpen());
+        QCOMPARE(state.sessionState(), SessionState::MenuOpen);
+        state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox});
+        QVERIFY(state.optionsOpen());
+        state.handleInput({InputAction::MoveUp, InputPhase::Pressed, InputDeviceKind::Xbox});
+        QCOMPARE(state.selectedOption(), 4);
+        state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox});
+        QVERIFY(!state.optionsOpen());
+    }
+
+    void enablingReopenStoresCurrentValidatedPathAndRestoreRevalidates() {
+        QTemporaryDir temp;
+        const auto rom = validRom(temp);
+        QVERIFY(!rom.isEmpty());
+        const auto settingsFile = temp.filePath("settings.ini");
+        QSettings settings(settingsFile, QSettings::IniFormat);
+        SessionController session(std::make_unique<ProbeCore>());
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        state.loadRomUrl(QUrl::fromLocalFile(rom));
+        QCOMPARE(state.sessionState(), SessionState::Playing);
+        QVERIFY(!settings.contains("lastRomPath"));
+        state.setOption(QStringLiteral("reopenLastGame"), true);
+        QCOMPARE(settings.value("lastRomPath").toString(), rom);
+        QVERIFY(session.stop().ok());
+
+        SessionController restoredSession(std::make_unique<ProbeCore>());
+        InputRouter restoredRouter;
+        UiState restored(restoredSession, restoredRouter, validator, paths, settings);
+        restored.restoreLastGame();
+        QCOMPARE(restored.sessionState(), SessionState::Playing);
+        restored.setOption(QStringLiteral("reopenLastGame"), false);
+        QVERIFY(!settings.contains("lastRomPath"));
+    }
+
+    void missingStoredRomIsVisibleAndNeverLoaded() {
+        QTemporaryDir temp;
+        QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
+        settings.setValue("reopenLastGame", true);
+        settings.setValue("lastRomPath", temp.filePath("missing.nds"));
+        auto core = std::make_unique<ProbeCore>();
+        auto* observed = core.get();
+        SessionController session(std::move(core));
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        state.restoreLastGame();
+        QCOMPARE(observed->loads, 0);
+        QCOMPARE(state.sessionState(), SessionState::NoRom);
+        QVERIFY(!state.statusMessage().isEmpty());
     }
 };
 

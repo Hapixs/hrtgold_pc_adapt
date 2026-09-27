@@ -39,6 +39,7 @@ ApplicationWindow {
             visible: uiState.welcomeVisible
             statusMessage: uiState.statusMessage
             onChooseRequested: uiState.chooseRom()
+            onKeyRequested: function(key, pressed, repeated) { uiState.handleKey(key, pressed, repeated) }
         }
         MainMenu {
             id: mainMenu
@@ -49,12 +50,12 @@ ApplicationWindow {
             confirmHint: uiState.footerConfirm
             backHint: uiState.footerBack
             menuHint: uiState.footerMenu
-            onSelectedIndexChanged: uiState.setSelectedTile(selectedIndex)
+            selectedIndex: uiState.selectedTile
+            onKeyRequested: function(key, pressed, repeated) { uiState.handleKey(key, pressed, repeated) }
             onTileActivated: function(index) {
                 uiState.setSelectedTile(index)
                 uiState.activateSelected()
             }
-            onResumeRequested: uiState.resumeGame()
         }
         OptionsPanel {
             id: optionsPanel
@@ -64,22 +65,19 @@ ApplicationWindow {
             smoothScaling: uiState.smoothScaling
             fullscreen: uiState.fullscreen
             reopenLastGame: uiState.reopenLastGame
-            onOptionRequested: function(name, value) { uiState.setOption(name, value) }
+            selectedOption: uiState.selectedOption
+            onOptionValueRequested: function(index, value) { uiState.setOptionValue(index, value) }
             onCloseRequested: uiState.closeOptions()
+            onKeyRequested: function(key, pressed, repeated) { uiState.handleKey(key, pressed, repeated) }
         }
 
         Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_F11 || event.key === Qt.Key_Tab ||
-                (!uiState.menuVisible && !uiState.welcomeVisible)) {
-                uiState.handleKey(event.key, true, event.isAutoRepeat)
-                event.accepted = true
-            }
+            uiState.handleKey(event.key, true, event.isAutoRepeat)
+            event.accepted = true
         }
         Keys.onReleased: function(event) {
-            if (!uiState.menuVisible && !uiState.welcomeVisible) {
-                uiState.handleKey(event.key, false, event.isAutoRepeat)
-                event.accepted = true
-            }
+            uiState.handleKey(event.key, false, event.isAutoRepeat)
+            event.accepted = true
         }
     }
 
@@ -87,12 +85,11 @@ ApplicationWindow {
         id: romDialog
         title: "Choisir une ROM HeartGold"
         nameFilters: ["Jeux Nintendo DS (*.nds)"]
-        onAccepted: uiState.loadRomPath(selectedFile.toLocalFile())
+        onAccepted: uiState.loadRomUrl(romDialog.selectedFile)
     }
     Connections {
         target: uiState
         function onRomSelectionRequested() { romDialog.open() }
-        function onSelectedTileChanged() { mainMenu.selectedIndex = uiState.selectedTile }
         function onSessionStateChanged() {
             if (uiState.menuVisible) mainMenu.forceActiveFocus()
             else if (uiState.welcomeVisible) welcomePage.forceActiveFocus()

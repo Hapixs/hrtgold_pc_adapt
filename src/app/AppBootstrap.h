@@ -18,7 +18,8 @@ class GameSurface;
 
 class AppBootstrap final {
 public:
-    explicit AppBootstrap(bool fakeMode);
+    explicit AppBootstrap(bool fakeMode, const QString& settingsFile = {},
+                          const QString& appDataBase = {});
     ~AppBootstrap();
 
     AppBootstrap(const AppBootstrap&) = delete;
@@ -38,7 +39,7 @@ private:
     InputRouter router_;
     RomValidator validator_;
     AppPaths paths_;
-    QSettings settings_;
+    std::unique_ptr<QSettings> settings_;
     std::unique_ptr<UiState> uiState_;
     QTimer pumpTimer_;
     QTimer frameTimer_;

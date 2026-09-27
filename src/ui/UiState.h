@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QSettings>
 #include <QStringList>
+#include <QUrl>
 #include <QVariant>
 
 #include <functional>
@@ -25,6 +26,7 @@ class UiState final : public QObject {
     Q_PROPERTY(bool fullscreen READ fullscreen NOTIFY optionsChanged)
     Q_PROPERTY(bool reopenLastGame READ reopenLastGame NOTIFY optionsChanged)
     Q_PROPERTY(bool optionsOpen READ optionsOpen NOTIFY optionsOpenChanged)
+    Q_PROPERTY(int selectedOption READ selectedOption WRITE setSelectedOption NOTIFY selectedOptionChanged)
     Q_PROPERTY(QString footerConfirm READ footerConfirm NOTIFY activeDeviceChanged)
     Q_PROPERTY(QString footerBack READ footerBack NOTIFY activeDeviceChanged)
     Q_PROPERTY(QString footerMenu READ footerMenu NOTIFY activeDeviceChanged)
@@ -52,6 +54,7 @@ public:
     bool fullscreen() const noexcept { return fullscreen_; }
     bool reopenLastGame() const noexcept { return reopenLastGame_; }
     bool optionsOpen() const noexcept { return optionsOpen_; }
+    int selectedOption() const noexcept { return selectedOption_; }
     QString footerConfirm() const;
     QString footerBack() const;
     QString footerMenu() const;
@@ -61,7 +64,11 @@ public:
     Q_INVOKABLE void resumeGame();
     Q_INVOKABLE void chooseRom();
     Q_INVOKABLE void loadRomPath(const QString& path);
+    Q_INVOKABLE void loadRomUrl(const QUrl& url);
+    void restoreLastGame();
     Q_INVOKABLE void setOption(const QString& name, const QVariant& value);
+    Q_INVOKABLE void setOptionValue(int option, const QVariant& value);
+    Q_INVOKABLE void setSelectedOption(int option);
     Q_INVOKABLE void closeOptions();
     Q_INVOKABLE void handleKey(int key, bool pressed, bool repeated = false);
     void handleInput(const InputEvent& event);
@@ -75,11 +82,13 @@ signals:
     void statusMessageChanged();
     void optionsChanged();
     void optionsOpenChanged();
+    void selectedOptionChanged();
 
 private:
     void onSessionState(SessionState state);
     void setStatusMessage(QString message);
     void moveSelection(UiCommand command);
+    void handleOptionCommand(UiCommand command);
 
     SessionController& session_;
     InputRouter& router_;
@@ -97,4 +106,6 @@ private:
     bool fullscreen_{false};
     bool reopenLastGame_{false};
     bool optionsOpen_{false};
+    int selectedOption_{0};
+    QString currentRomPath_;
 };

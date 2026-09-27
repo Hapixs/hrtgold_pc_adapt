@@ -18,6 +18,7 @@ enum class UiCommand {
     Confirm,
     Back,
     ToggleFullscreen,
+    ChooseRom,
 };
 
 struct RouteDecision {

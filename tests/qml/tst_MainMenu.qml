@@ -17,32 +17,36 @@ TestCase {
         tileNames: ["Pokédex", "Équipe", "Sac", "Dresseur", "Pokégear", "Carte", "Options", "Reprendre"]
     }
     SignalSpy { id: activatedSpy; target: menu; signalName: "tileActivated" }
-    SignalSpy { id: resumeSpy; target: menu; signalName: "resumeRequested" }
+    SignalSpy { id: keySpy; target: menu; signalName: "keyRequested" }
 
     function init() {
         menu.selectedIndex = 0
         menu.forceActiveFocus()
         activatedSpy.clear()
-        resumeSpy.clear()
+        keySpy.clear()
     }
 
-    function test_wrap_and_activate() {
+    function test_keys_forward_to_bridge_without_local_navigation() {
         compare(menu.selectedIndex, 0)
         keyClick(Qt.Key_Right)
-        compare(menu.selectedIndex, 1)
-        keyClick(Qt.Key_Down)
-        compare(menu.selectedIndex, 5)
+        compare(menu.selectedIndex, 0)
+        compare(keySpy.signalArguments[0][0], Qt.Key_Right)
+        compare(keySpy.signalArguments[0][1], true)
         keyClick(Qt.Key_Return)
-        compare(activatedSpy.signalArguments[0][0], 5)
-        keyClick(Qt.Key_Right)
-        keyClick(Qt.Key_Right)
-        keyClick(Qt.Key_Right)
-        compare(menu.selectedIndex, 4)
+        compare(menu.selectedIndex, 0)
+        compare(activatedSpy.count, 0)
     }
 
-    function test_back_requests_resume() {
+    function test_back_is_forwarded_to_bridge() {
         keyClick(Qt.Key_Escape)
-        compare(resumeSpy.count, 1)
+        compare(keySpy.signalArguments[0][0], Qt.Key_Escape)
+        compare(keySpy.signalArguments[0][1], true)
+    }
+
+    function test_pointer_activation_reports_tile_without_mutating_selection() {
+        mouseClick(menu.tileAt(6))
+        compare(activatedSpy.signalArguments[0][0], 6)
+        compare(menu.selectedIndex, 0)
     }
 
     function test_tiles_have_accessible_names_and_unavailable_descriptions() {

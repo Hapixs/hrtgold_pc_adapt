@@ -187,16 +187,20 @@ private slots:
         QCOMPARE(repeatedMovement.command, UiCommand::MoveRight);
     }
 
-    void ignoresGameActionsOutsideAnActiveSession() {
+    void welcomeConfirmRequestsRomAndSuppressesRepeat() {
         InputRouter router;
-
         const auto decision = router.route(
-            {InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Keyboard},
+            {InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox},
             SessionState::NoRom);
-
-        QCOMPARE(decision.target, RouteTarget::None);
-        QCOMPARE(decision.command, UiCommand::None);
+        QCOMPARE(decision.target, RouteTarget::Application);
+        QCOMPARE(decision.command, UiCommand::ChooseRom);
         QCOMPARE(decision.dsMask, DsButtonMask{0});
+        QCOMPARE(router.route({InputAction::Confirm, InputPhase::Pressed,
+                               InputDeviceKind::Xbox, true}, SessionState::NoRom).target,
+                 RouteTarget::None);
+        QCOMPARE(router.route({InputAction::MoveUp, InputPhase::Pressed,
+                               InputDeviceKind::Xbox}, SessionState::NoRom).target,
+                 RouteTarget::None);
     }
 };
 

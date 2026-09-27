@@ -5,19 +5,24 @@
 
 #include <QStandardPaths>
 
-AppBootstrap::AppBootstrap(bool fakeMode)
+AppBootstrap::AppBootstrap(bool fakeMode, const QString& settingsFile,
+                           const QString& appDataBase)
     : fakeMode_(fakeMode), runtime_(api_), audioSink_(runtime_.audioSink()),
-      paths_(qEnvironmentVariable("LOCALAPPDATA",
-                                  QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
+      paths_((appDataBase.isEmpty()
+                  ? qEnvironmentVariable("LOCALAPPDATA",
+                                         QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
+                  : appDataBase)
                  .toStdWString()),
-      settings_(QSettings::IniFormat, QSettings::UserScope,
-                QStringLiteral("HeartGoldPCRemastered"),
-                QStringLiteral("HeartGoldPCRemastered")) {
+      settings_(settingsFile.isEmpty()
+                    ? std::make_unique<QSettings>(QSettings::IniFormat, QSettings::UserScope,
+                                                  QStringLiteral("HeartGoldPCRemastered"),
+                                                  QStringLiteral("HeartGoldPCRemastered"))
+                    : std::make_unique<QSettings>(settingsFile, QSettings::IniFormat)) {
     auto core = std::make_unique<FakeEmulatorCore>();
     fakeCore_ = core.get();
     session_ = std::make_unique<SessionController>(std::move(core));
     uiState_ = std::make_unique<UiState>(
-        *session_, router_, validator_, paths_, settings_, UiState::RomPicker{},
+        *session_, router_, validator_, paths_, *settings_, UiState::RomPicker{},
         [this](float volume) { runtime_.setVolume(volume); });
 
     QObject::connect(&runtime_, &SdlRuntime::inputEvent, uiState_.get(),
@@ -59,7 +64,10 @@ void AppBootstrap::attachSurface(QObject* root) {
 void AppBootstrap::start() {
     pumpTimer_.start();
     frameTimer_.start();
-    if (!fakeMode_) return;
+    if (!fakeMode_) {
+        uiState_->restoreLastGame();
+        return;
+    }
     const EmulationConfig config{
         std::filesystem::path{L"C:/fake/heartgold.nds"},
         std::filesystem::path{L"C:/fake/native.sav"}, std::string(64, '0')};

@@ -2,6 +2,8 @@
 
 #include <Qt>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <utility>
 
@@ -85,6 +87,7 @@ void UiState::activateSelected() {
         setStatusMessage(QStringLiteral("Disponible dans une prochaine étape"));
     } else if (selectedTile_ == 6) {
         optionsOpen_ = true;
+        setSelectedOption(0);
         setStatusMessage({});
         emit optionsOpenChanged();
     } else {
@@ -131,14 +134,35 @@ void UiState::loadRomPath(const QString& selectedPath) {
     }
     if (reopenLastGame_) settings_.setValue(QStringLiteral("lastRomPath"), selectedPath);
     else settings_.remove(QStringLiteral("lastRomPath"));
+    currentRomPath_ = selectedPath;
     setStatusMessage({});
+}
+
+void UiState::loadRomUrl(const QUrl& url) {
+    if (!url.isLocalFile() || url.toLocalFile().isEmpty()) {
+        setStatusMessage(QStringLiteral("Ce fichier n’est pas une ROM HeartGold valide."));
+        return;
+    }
+    loadRomPath(url.toLocalFile());
+}
+
+void UiState::restoreLastGame() {
+    if (!reopenLastGame_ || state_ != SessionState::NoRom) return;
+    const auto path = settings_.value(QStringLiteral("lastRomPath")).toString();
+    if (!path.isEmpty()) loadRomPath(path);
 }
 
 void UiState::setOption(const QString& name, const QVariant& value) {
     if (name == QLatin1String("volume")) {
+        const auto type = value.metaType().id();
+        if (type != QMetaType::Int && type != QMetaType::UInt &&
+            type != QMetaType::LongLong && type != QMetaType::ULongLong &&
+            type != QMetaType::Double && type != QMetaType::Float) return;
         bool ok = false;
-        const int next = value.toInt(&ok);
-        if (!ok || next < 0 || next > 100) return;
+        const double numeric = value.toDouble(&ok);
+        if (!ok || !std::isfinite(numeric) || numeric < 0 || numeric > 100 ||
+            std::floor(numeric) != numeric) return;
+        const int next = static_cast<int>(numeric);
         volume_ = next;
         if (volumeSetter_) volumeSetter_(volume_ / 100.0f);
         settings_.setValue(name, volume_);
@@ -152,12 +176,30 @@ void UiState::setOption(const QString& name, const QVariant& value) {
         else {
             reopenLastGame_ = next;
             if (!next) settings_.remove(QStringLiteral("lastRomPath"));
+            else if (!currentRomPath_.isEmpty())
+                settings_.setValue(QStringLiteral("lastRomPath"), currentRomPath_);
         }
         settings_.setValue(name, next);
     } else {
         return;
     }
     emit optionsChanged();
+}
+
+void UiState::setOptionValue(int option, const QVariant& value) {
+    static const QStringList names{QStringLiteral("volume"),
+                                   QStringLiteral("smoothScaling"),
+                                   QStringLiteral("fullscreen"),
+                                   QStringLiteral("reopenLastGame")};
+    if (option < 0 || option >= names.size()) return;
+    setSelectedOption(option);
+    setOption(names.at(option), value);
+}
+
+void UiState::setSelectedOption(int option) {
+    if (option < 0 || option > 4 || selectedOption_ == option) return;
+    selectedOption_ = option;
+    emit selectedOptionChanged();
 }
 
 void UiState::closeOptions() {
@@ -167,6 +209,7 @@ void UiState::closeOptions() {
 }
 
 void UiState::handleKey(int key, bool pressed, bool repeated) {
+    if (pressed) setActiveDevice(InputDeviceKind::Keyboard);
     InputAction action;
     switch (key) {
     case Qt::Key_Up: case Qt::Key_W: action = InputAction::MoveUp; break;
@@ -191,16 +234,45 @@ void UiState::handleInput(const InputEvent& event) {
     } else if (decision.target == RouteTarget::Application) {
         if (decision.command == UiCommand::OpenMenu) session_.openMenu();
         else if (decision.command == UiCommand::CloseMenu) resumeGame();
+        else if (decision.command == UiCommand::ChooseRom) chooseRom();
         else if (decision.command == UiCommand::ToggleFullscreen)
             setOption(QStringLiteral("fullscreen"), !fullscreen_);
     } else if (decision.target == RouteTarget::Overlay) {
         if (optionsOpen_) {
-            if (decision.command == UiCommand::Back) closeOptions();
+            handleOptionCommand(decision.command);
             return;
         }
         if (decision.command == UiCommand::Confirm) activateSelected();
         else if (decision.command == UiCommand::Back) resumeGame();
         else moveSelection(decision.command);
+    }
+}
+
+void UiState::handleOptionCommand(UiCommand command) {
+    if (command == UiCommand::Back) {
+        closeOptions();
+        return;
+    }
+    if (command == UiCommand::MoveUp) {
+        setSelectedOption((selectedOption_ + 4) % 5);
+    } else if (command == UiCommand::MoveDown) {
+        setSelectedOption((selectedOption_ + 1) % 5);
+    } else if (selectedOption_ == 0 &&
+               (command == UiCommand::MoveLeft || command == UiCommand::MoveRight ||
+                command == UiCommand::Confirm)) {
+        const int delta = command == UiCommand::MoveLeft ? -5 : 5;
+        setOption(QStringLiteral("volume"), std::clamp(volume_ + delta, 0, 100));
+    } else if (selectedOption_ >= 1 && selectedOption_ <= 3) {
+        const auto name = selectedOption_ == 1 ? QStringLiteral("smoothScaling") :
+                          selectedOption_ == 2 ? QStringLiteral("fullscreen") :
+                                                 QStringLiteral("reopenLastGame");
+        const bool current = selectedOption_ == 1 ? smoothScaling_ :
+                             selectedOption_ == 2 ? fullscreen_ : reopenLastGame_;
+        if (command == UiCommand::Confirm) setOption(name, !current);
+        else if (command == UiCommand::MoveLeft) setOption(name, false);
+        else if (command == UiCommand::MoveRight) setOption(name, true);
+    } else if (selectedOption_ == 4 && command == UiCommand::Confirm) {
+        closeOptions();
     }
 }
 

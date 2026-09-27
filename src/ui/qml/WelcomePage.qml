@@ -5,7 +5,17 @@ FocusScope {
     property string statusMessage: ""
     property alias chooseControl: chooseButton
     signal chooseRequested()
+    signal keyRequested(int key, bool pressed, bool repeated)
     readonly property real canvasScale: Math.min(width / 1920, height / 1080)
+
+    Keys.onPressed: function(event) {
+        keyRequested(event.key, true, event.isAutoRepeat)
+        event.accepted = true
+    }
+    Keys.onReleased: function(event) {
+        keyRequested(event.key, false, event.isAutoRepeat)
+        event.accepted = true
+    }
 
     Rectangle { anchors.fill: parent; color: "#132743" }
     Rectangle {
@@ -76,8 +86,6 @@ FocusScope {
                 font.weight: Font.DemiBold
             }
             MouseArea { anchors.fill: parent; onClicked: welcome.chooseRequested() }
-            Keys.onReturnPressed: welcome.chooseRequested()
-            Keys.onSpacePressed: welcome.chooseRequested()
         }
         Text {
             x: 96; y: 855; width: 1728; height: 100

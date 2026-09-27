@@ -115,6 +115,11 @@ RouteDecision InputRouter::route(const InputEvent& event, SessionState state) {
         }
     }
 
+    if ((state == SessionState::NoRom || state == SessionState::Error) &&
+        event.action == InputAction::Confirm && event.phase == InputPhase::Pressed) {
+        return {RouteTarget::Application, UiCommand::ChooseRom, 0};
+    }
+
     return {};
 }
 
