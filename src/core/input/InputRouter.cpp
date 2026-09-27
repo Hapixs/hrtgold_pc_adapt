@@ -47,7 +47,7 @@ UiCommand overlayCommandFor(InputAction action) noexcept {
 
 bool suppressesRepeat(InputAction action) noexcept {
     return action == InputAction::OpenMenu || action == InputAction::Back ||
-           action == InputAction::Confirm;
+           action == InputAction::Confirm || action == InputAction::ToggleFullscreen;
 }
 
 std::size_t deviceIndex(InputDeviceKind device) noexcept {

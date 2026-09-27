@@ -107,12 +107,14 @@ void UiState::resumeGame() {
 }
 
 void UiState::chooseRom() {
+    if (!prepareRomSelection()) return;
     if (picker_) loadRomPath(picker_());
     else emit romSelectionRequested();
 }
 
 void UiState::loadRomPath(const QString& selectedPath) {
     if (selectedPath.isEmpty()) return;
+    if (!prepareRomSelection()) return;
     const auto romPath = std::filesystem::path(selectedPath.toStdWString());
     const auto validation = validator_.validate(romPath);
     if (validation.status != RomStatus::ValidHeartGold) {
@@ -138,7 +140,19 @@ void UiState::loadRomPath(const QString& selectedPath) {
     setStatusMessage({});
 }
 
+bool UiState::prepareRomSelection() {
+    if (state_ != SessionState::Error) return true;
+    const auto result = session_.stop();
+    if (!result.ok()) {
+        setStatusMessage(QString::fromStdString(result.message));
+        return false;
+    }
+    setStatusMessage({});
+    return true;
+}
+
 void UiState::loadRomUrl(const QUrl& url) {
+    if (!prepareRomSelection()) return;
     if (!url.isLocalFile() || url.toLocalFile().isEmpty()) {
         setStatusMessage(QStringLiteral("Ce fichier n’est pas une ROM HeartGold valide."));
         return;

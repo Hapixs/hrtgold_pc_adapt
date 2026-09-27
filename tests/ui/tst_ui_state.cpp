@@ -14,14 +14,20 @@ namespace {
 class ProbeCore final : public EmulatorCore {
 public:
     EmulationResult load(const EmulationConfig& config) override {
+        if (!loadResult.ok()) return loadResult;
         loaded = config;
         ++loads;
         return {};
     }
     EmulationResult start() override { running = true; return {}; }
-    EmulationResult pause() override { ++pauses; return {}; }
+    EmulationResult pause() override { ++pauses; return pauseResult; }
     EmulationResult resume() override { ++resumes; return {}; }
-    EmulationResult stop() override { running = false; return {}; }
+    EmulationResult stop() override {
+        ++stops;
+        if (!stopResult.ok()) return stopResult;
+        running = false;
+        return {};
+    }
     void setButtons(DsButtonMask buttons) override { lastButtons = buttons; }
     std::shared_ptr<const VideoFrame> latestFrame() const override { return {}; }
     bool isRunning() const noexcept override { return running; }
@@ -29,8 +35,12 @@ public:
     int loads{0};
     int pauses{0};
     int resumes{0};
+    int stops{0};
     bool running{false};
     DsButtonMask lastButtons{0};
+    EmulationResult loadResult;
+    EmulationResult pauseResult;
+    EmulationResult stopResult;
 };
 
 EmulationConfig fakeConfig() {
@@ -241,6 +251,23 @@ private slots:
         QVERIFY(state.optionsOpen());
     }
 
+    void f11RepeatDoesNotFlipFullscreenTwice() {
+        QTemporaryDir temp;
+        QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
+        SessionController session(std::make_unique<ProbeCore>());
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        QVERIFY(!state.fullscreen());
+        state.handleKey(Qt::Key_F11, true);
+        QVERIFY(state.fullscreen());
+        state.handleKey(Qt::Key_F11, true, true);
+        QVERIFY(state.fullscreen());
+        state.handleKey(Qt::Key_F11, false);
+        QVERIFY(state.fullscreen());
+    }
+
     void controllerNavigatesOptionsAdjustsVolumeAndReturns() {
         QTemporaryDir temp;
         QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
@@ -322,6 +349,115 @@ private slots:
         QCOMPARE(observed->loads, 0);
         QCOMPARE(state.sessionState(), SessionState::NoRom);
         QVERIFY(!state.statusMessage().isEmpty());
+    }
+
+    void activeErrorChooserStopsBeforeRequestAndValidRetryLoads() {
+        QTemporaryDir temp;
+        QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
+        auto core = std::make_unique<ProbeCore>();
+        auto* observed = core.get();
+        SessionController session(std::move(core));
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        QSignalSpy picker(&state, &UiState::romSelectionRequested);
+        QVERIFY(session.load(fakeConfig()).ok());
+        observed->pauseResult = {EmulationErrorCode::CoreFailure, "pause failed"};
+        QVERIFY(!session.openMenu().ok());
+        QCOMPARE(state.sessionState(), SessionState::Error);
+
+        state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox});
+        QCOMPARE(observed->stops, 1);
+        QCOMPARE(state.sessionState(), SessionState::NoRom);
+        QCOMPARE(picker.size(), 1);
+
+        const auto rom = validRom(temp);
+        QVERIFY(!rom.isEmpty());
+        state.loadRomUrl(QUrl::fromLocalFile(rom));
+        QCOMPARE(observed->loads, 2);
+        QCOMPARE(state.sessionState(), SessionState::Playing);
+    }
+
+    void failedErrorCleanupBlocksChooserAndDirectRomLoad() {
+        QTemporaryDir temp;
+        QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
+        auto core = std::make_unique<ProbeCore>();
+        auto* observed = core.get();
+        SessionController session(std::move(core));
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        QSignalSpy picker(&state, &UiState::romSelectionRequested);
+        QVERIFY(session.load(fakeConfig()).ok());
+        observed->pauseResult = {EmulationErrorCode::CoreFailure, "pause failed"};
+        observed->stopResult = {EmulationErrorCode::CoreFailure, "cleanup failed"};
+        QVERIFY(!session.openMenu().ok());
+
+        state.chooseRom();
+        QCOMPARE(state.sessionState(), SessionState::Error);
+        QCOMPARE(picker.size(), 0);
+        QCOMPARE(observed->stops, 1);
+        QVERIFY(state.statusMessage().contains(QStringLiteral("cleanup failed")));
+
+        const auto rom = validRom(temp);
+        QVERIFY(!rom.isEmpty());
+        state.loadRomUrl(QUrl::fromLocalFile(rom));
+        QCOMPARE(state.sessionState(), SessionState::Error);
+        QCOMPARE(observed->loads, 1);
+        QCOMPARE(observed->stops, 2);
+        QCOMPARE(picker.size(), 0);
+    }
+
+    void inactiveLoadErrorChooserNormalizesWithoutStoppingCoreThenRetries() {
+        QTemporaryDir temp;
+        QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
+        auto core = std::make_unique<ProbeCore>();
+        auto* observed = core.get();
+        SessionController session(std::move(core));
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        QSignalSpy picker(&state, &UiState::romSelectionRequested);
+        observed->loadResult = {EmulationErrorCode::InvalidRom, "inactive load failed"};
+        QVERIFY(!session.load(fakeConfig()).ok());
+        QCOMPARE(state.sessionState(), SessionState::Error);
+        observed->loadResult = {};
+
+        state.chooseRom();
+        QCOMPARE(state.sessionState(), SessionState::NoRom);
+        QCOMPARE(observed->stops, 0);
+        QCOMPARE(picker.size(), 1);
+
+        const auto rom = validRom(temp);
+        QVERIFY(!rom.isEmpty());
+        state.loadRomPath(rom);
+        QCOMPARE(state.sessionState(), SessionState::Playing);
+        QCOMPARE(observed->loads, 1);
+    }
+
+    void directRomUrlInActiveErrorCleansUpBeforeLoading() {
+        QTemporaryDir temp;
+        QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
+        auto core = std::make_unique<ProbeCore>();
+        auto* observed = core.get();
+        SessionController session(std::move(core));
+        InputRouter router;
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        UiState state(session, router, validator, paths, settings);
+        QVERIFY(session.load(fakeConfig()).ok());
+        observed->pauseResult = {EmulationErrorCode::CoreFailure, "pause failed"};
+        QVERIFY(!session.openMenu().ok());
+
+        const auto rom = validRom(temp);
+        QVERIFY(!rom.isEmpty());
+        state.loadRomUrl(QUrl::fromLocalFile(rom));
+        QCOMPARE(observed->stops, 1);
+        QCOMPARE(observed->loads, 2);
+        QCOMPARE(state.sessionState(), SessionState::Playing);
     }
 };
 

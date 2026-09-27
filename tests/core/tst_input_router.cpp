@@ -202,6 +202,27 @@ private slots:
                                InputDeviceKind::Xbox}, SessionState::NoRom).target,
                  RouteTarget::None);
     }
+
+    void fullscreenToggleSuppressesAutoRepeatButArrowsStillRepeat() {
+        InputRouter router;
+        const auto first = router.route(
+            {InputAction::ToggleFullscreen, InputPhase::Pressed, InputDeviceKind::Keyboard},
+            SessionState::MenuOpen);
+        const auto repeat = router.route(
+            {InputAction::ToggleFullscreen, InputPhase::Pressed, InputDeviceKind::Keyboard, true},
+            SessionState::MenuOpen);
+        const auto release = router.route(
+            {InputAction::ToggleFullscreen, InputPhase::Released, InputDeviceKind::Keyboard},
+            SessionState::MenuOpen);
+        const auto arrowRepeat = router.route(
+            {InputAction::MoveRight, InputPhase::Pressed, InputDeviceKind::Keyboard, true},
+            SessionState::MenuOpen);
+        QCOMPARE(first.target, RouteTarget::Application);
+        QCOMPARE(first.command, UiCommand::ToggleFullscreen);
+        QCOMPARE(repeat.target, RouteTarget::None);
+        QCOMPARE(release.target, RouteTarget::None);
+        QCOMPARE(arrowRepeat.target, RouteTarget::Overlay);
+    }
 };
 
 QTEST_GUILESS_MAIN(InputRouterTest)

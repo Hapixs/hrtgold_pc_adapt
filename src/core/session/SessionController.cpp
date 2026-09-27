@@ -74,6 +74,11 @@ EmulationResult SessionController::closeMenu() {
 
 EmulationResult SessionController::stop() {
     assertOwningThread();
+    if (state_ == SessionState::Error && !coreMayNeedStop_) {
+        acceptsDsInput_ = false;
+        publishState(SessionState::NoRom);
+        return {};
+    }
     const auto canCleanUpError =
         state_ == SessionState::Error && coreMayNeedStop_;
     if (state_ != SessionState::Playing && state_ != SessionState::MenuOpen &&

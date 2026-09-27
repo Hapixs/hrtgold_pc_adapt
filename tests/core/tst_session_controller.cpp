@@ -218,6 +218,20 @@ private slots:
         QVERIFY(session.stop().ok());
     }
 
+    void stopNormalizesInactiveLoadErrorWithoutTouchingCore() {
+        auto core = std::make_unique<ProbeEmulatorCore>();
+        auto* observed = core.get();
+        core->loadResult = failure("inactive load failed");
+        core->rejectStopWhileInactive = true;
+        SessionController session(std::move(core));
+        QVERIFY(!session.load(validConfig()).ok());
+        QCOMPARE(session.state(), SessionState::Error);
+
+        QVERIFY(session.stop().ok());
+        QCOMPARE(session.state(), SessionState::NoRom);
+        QCOMPARE(observed->calls, std::vector<std::string>({"load"}));
+    }
+
     void startFailurePublishesErrorExactlyOnce() {
         auto core = std::make_unique<ProbeEmulatorCore>();
         core->startResult = failure("start failed");

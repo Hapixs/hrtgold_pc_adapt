@@ -85,6 +85,7 @@ signals:
     void selectedOptionChanged();
 
 private:
+    bool prepareRomSelection();
     void onSessionState(SessionState state);
     void setStatusMessage(QString message);
     void moveSelection(UiCommand command);
