@@ -1,0 +1,10 @@
+set(BUILD_QT_SDL OFF CACHE BOOL "Do not build the upstream frontend" FORCE)
+set(ENABLE_OGLRENDERER OFF CACHE BOOL "Use the software renderer" FORCE)
+set(ENABLE_GDBSTUB OFF CACHE BOOL "No debugger server" FORCE)
+set(ENABLE_JIT ON CACHE BOOL "Enable the upstream JIT" FORCE)
+set(ENABLE_LTO_RELEASE OFF CACHE BOOL "No upstream release LTO" FORCE)
+set(ENABLE_LTO OFF CACHE BOOL "No upstream LTO" FORCE)
+# AUTOMOC belongs to our Qt targets, not to any vendored library.
+set(CMAKE_AUTOMOC OFF)
+add_subdirectory(third_party/melonds EXCLUDE_FROM_ALL)
+set(CMAKE_AUTOMOC ON)

@@ -152,3 +152,24 @@ add_test(NAME tst_app_bootstrap COMMAND tst_app_bootstrap)
 set_tests_properties(tst_app_bootstrap PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
 )
+
+include(cmake/MelonDS.cmake)
+add_library(heartgold_melonds STATIC
+    src/emulation/melonds/MelonDsAdapter.cpp
+    src/emulation/melonds/MelonPlatform.cpp
+    src/emulation/melonds/MelonRomLoader.cpp
+)
+target_include_directories(heartgold_melonds PUBLIC src)
+target_link_libraries(heartgold_melonds PRIVATE core heartgold_core heartgold_sdl)
+qt_add_executable(tst_melonds_adapter
+    tests/emulation/tst_melonds_adapter.cpp
+    src/emulation/melonds/testing/MelonDsTestAccess.cpp
+)
+target_include_directories(tst_melonds_adapter PRIVATE third_party/melonds/src)
+target_link_libraries(tst_melonds_adapter PRIVATE heartgold_melonds heartgold_core heartgold_sdl Qt6::Test)
+add_test(NAME tst_melonds_adapter COMMAND tst_melonds_adapter)
+set_tests_properties(tst_melonds_adapter PROPERTIES TIMEOUT 30)
+qt_add_executable(tst_melon_platform src/emulation/melonds/testing/tst_melon_platform.cpp)
+target_include_directories(tst_melon_platform PRIVATE third_party/melonds/src)
+target_link_libraries(tst_melon_platform PRIVATE heartgold_melonds Qt6::Test)
+add_test(NAME tst_melon_platform COMMAND tst_melon_platform)

@@ -58,6 +58,18 @@ class SaveRepositoryTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    void createsFirstSaveWithoutAnExistingActiveFile() {
+        QTemporaryDir temporary;
+        AppPaths paths(toPath(temporary.path()));
+        const auto directory = paths.saveDirectory(validHash);
+        QVERIFY(std::filesystem::create_directories(directory));
+        SaveRepository repository(directory, fixedClock());
+        const std::vector<std::uint8_t> bytes{9, 8, 7};
+        QCOMPARE(repository.replace(bytes), SaveWriteError::None);
+        QCOMPARE(repository.load(), bytes);
+        QVERIFY(!std::filesystem::exists(directory / "game.sav.tmp"));
+        QCOMPARE(std::distance(std::filesystem::directory_iterator(directory), std::filesystem::directory_iterator()), 1);
+    }
     void derivesSaveDirectoryOnlyFromHash() {
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());

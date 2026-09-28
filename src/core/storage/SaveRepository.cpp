@@ -111,7 +111,7 @@ SaveWriteError SaveRepository::replace(std::span<const std::uint8_t> bytes) {
             std::filesystem::remove(temporary, error);
             return SaveWriteError::NotWritable;
         }
-    } else if (error) {
+    } else if (error && error != std::errc::no_such_file_or_directory) {
         std::filesystem::remove(temporary, error);
         return SaveWriteError::NotWritable;
     }

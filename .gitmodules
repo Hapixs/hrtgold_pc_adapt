@@ -1,0 +1,3 @@
+[submodule "third_party/melonds"]
+	path = third_party/melonds
+	url = https://github.com/melonDS-emu/melonDS.git
