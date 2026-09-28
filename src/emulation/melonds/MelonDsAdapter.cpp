@@ -11,15 +11,9 @@ namespace {
 EmulationResult failure(EmulationErrorCode code, const char* message) { return {code, message}; }
 EmulationResult badState() { return failure(EmulationErrorCode::CoreFailure, "The emulator cannot perform this operation in its current state."); }
 bool sameSavePath(const std::filesystem::path& first, const std::filesystem::path& second) {
-    auto left = first.lexically_normal().generic_wstring();
-    auto right = second.lexically_normal().generic_wstring();
-#ifdef _WIN32
-    // App-generated paths use normal Windows case-insensitive naming. Lexical
-    // comparison also works before the hash directory or save file exists.
-    std::ranges::transform(left, left.begin(), [](wchar_t c){ return std::towlower(c); });
-    std::ranges::transform(right, right.begin(), [](wchar_t c){ return std::towlower(c); });
-#endif
-    return left == right;
+    // NTFS directories may be case-sensitive. Require identical spelling after
+    // lexical normalization; never assume that Games and games are aliases.
+    return first.lexically_normal().generic_wstring() == second.lexically_normal().generic_wstring();
 }
 }
 
@@ -32,6 +26,7 @@ MelonDsAdapter::Impl::Impl(SaveRepository repository, std::shared_ptr<SdlAudioSi
     platform.save = [this](std::span<const std::uint8_t> bytes) {
         // One complete newest snapshot, never an unbounded queue of patches.
         std::lock_guard lock(mutex);
+        if (!running) return;
         pendingSave.emplace(bytes.begin(), bytes.end());
         changed.notify_all();
     };
@@ -48,7 +43,12 @@ MelonDsAdapter::~MelonDsAdapter() { stop(); }
 EmulationResult MelonDsAdapter::load(const EmulationConfig& config) {
     std::lock_guard operation(impl_->operations);
     std::lock_guard lock(impl_->mutex);
+    // A rejected selection must never authorize a later restart of the old ROM,
+    // including rejection while a worker still needs an explicit stop().
+    impl_->loaded = false;
     if (impl_->worker.joinable() || impl_->running) return badState();
+    impl_->config = {};
+    impl_->pendingSave.reset();
     auto extension = config.romPath.extension().wstring();
     std::ranges::transform(extension, extension.begin(), [](wchar_t c){ return std::towlower(c); });
     if (!config.useDirectBoot || config.sampleRate != 48000 || !config.romPath.is_absolute() ||

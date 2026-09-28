@@ -45,6 +45,87 @@ class MelonDsAdapterTest final : public QObject {
         return {path, root / hash / "game.sav", hash};
     }
 private slots:
+    void caseDistinctRepositoryNamesAreNeverAliased() {
+        QTemporaryDir temporary;
+        const std::filesystem::path root(temporary.path().toStdWString());
+        const std::string hash(64, 'a');
+        const auto upper = root/"Games"/hash;
+        const auto lower = root/"games"/hash;
+        // Before creation the filesystem's case policy is unknown. These are
+        // distinct repository identities; NTFS may store both in one directory.
+        SaveRepository upperRepository(upper, std::chrono::system_clock::now);
+        SaveRepository lowerRepository(lower, std::chrono::system_clock::now);
+        MelonDsAdapter upperAdapter(upperRepository, {}, root);
+        MelonDsAdapter lowerAdapter(lowerRepository, {}, root);
+        EmulationConfig upperConfig{root/"absent.nds", upper/"game.sav", hash};
+        auto lowerConfig = upperConfig;
+        lowerConfig.savePath = lower/"game.sav";
+        QVERIFY(upperAdapter.load(upperConfig).ok());
+        QVERIFY(lowerAdapter.load(lowerConfig).ok());
+        QVERIFY(!upperAdapter.load(lowerConfig).ok());
+        QVERIFY(!lowerAdapter.load(upperConfig).ok());
+        QVERIFY(!std::filesystem::exists(upper));
+        QVERIFY(!std::filesystem::exists(lower));
+    }
+    void rejectedLoadInvalidatesPreviousStart_data() {
+        QTest::addColumn<int>("rejection");
+        QTest::newRow("stop-then-other-repository") << 0;
+        QTest::newRow("stop-then-invalid-settings") << 1;
+        QTest::newRow("busy-rejection-then-stop") << 2;
+    }
+    void rejectedLoadInvalidatesPreviousStart() {
+        QFETCH(int, rejection);
+        QTemporaryDir temporary;
+        const std::filesystem::path root(temporary.path().toStdWString());
+        const std::string hashA(64, 'a'), hashB(64, 'b');
+        SaveRepository repository(root/hashA, std::chrono::system_clock::now);
+        const std::vector<std::uint8_t> original{1,2,3};
+        QCOMPARE(repository.replace(original), SaveWriteError::None);
+        MelonDsAdapter adapter(repository, {}, root);
+        // If stale A is started it fails InvalidRom on this absent file, making
+        // the missing state guard observable without executing any cartridge.
+        EmulationConfig configA{root/"absent.nds", root/hashA/"game.sav", hashA};
+        auto configB = configA;
+        configB.savePath = root/hashB/"game.sav";
+        configB.romSha256 = hashB;
+        if (rejection == 1) { configB = configA; configB.useDirectBoot = false; }
+        QVERIFY(adapter.load(configA).ok());
+        QVERIFY(MelonDsTestAccess::startFreeBios(adapter).ok());
+        if (rejection != 2) QVERIFY(adapter.stop().ok());
+        QVERIFY(!adapter.load(configB).ok());
+        if (rejection == 2) QVERIFY(adapter.stop().ok());
+        QCOMPARE(adapter.start().code, EmulationErrorCode::CoreFailure);
+        QVERIFY(!adapter.isRunning());
+        MelonDsTestAccess::writeSave(adapter, std::vector<std::uint8_t>{7,8,9}, 0, 3);
+        adapter.stop();
+        QCOMPARE(repository.load(), original);
+    }
+    void rejectedLoadDoesNotCarrySaveCallbacksIntoTheNextSession() {
+        QTemporaryDir temporary;
+        const std::filesystem::path root(temporary.path().toStdWString());
+        const std::string hashA(64, 'a'), hashB(64, 'b');
+        SaveRepository repository(root/hashA, std::chrono::system_clock::now);
+        const std::vector<std::uint8_t> original{1,2,3};
+        QCOMPARE(repository.replace(original), SaveWriteError::None);
+        MelonDsAdapter adapter(repository, {}, root);
+        EmulationConfig configA{root/"absent.nds", root/hashA/"game.sav", hashA};
+        auto configB = configA;
+        configB.savePath = root/hashB/"game.sav";
+        configB.romSha256 = hashB;
+        QVERIFY(adapter.load(configA).ok());
+        QVERIFY(MelonDsTestAccess::startFreeBios(adapter).ok());
+        QVERIFY(adapter.stop().ok());
+        QVERIFY(!adapter.load(configB).ok());
+        MelonDsTestAccess::writeSave(adapter, std::vector<std::uint8_t>{7,8,9}, 0, 3);
+        QCOMPARE(repository.load(), original);
+        // Even an explicitly loaded later session must not inherit the rejected
+        // selection's inactive save callback.
+        QVERIFY(adapter.load(configA).ok());
+        QVERIFY(MelonDsTestAccess::startFreeBios(adapter).ok());
+        QVERIFY(adapter.pause().ok());
+        QVERIFY(adapter.stop().ok());
+        QCOMPARE(repository.load(), original);
+    }
     void saveConfigurationMustMatchBoundRepositoryBeforeAndAfterStop() {
         QTemporaryDir temporary;
         const std::filesystem::path root(temporary.path().toStdWString());
@@ -103,7 +184,7 @@ private slots:
         auto spelling = config.savePath.generic_wstring();
         std::ranges::transform(spelling, spelling.begin(), [](wchar_t c){ return std::towupper(c); });
         equivalent.savePath = std::filesystem::path(spelling);
-        QVERIFY(adapter.load(equivalent).ok());
+        QVERIFY(!adapter.load(equivalent).ok());
 #endif
         auto wrongName = config;
         wrongName.savePath = config.savePath.parent_path()/"other.sav";
