@@ -267,8 +267,11 @@ int Net_RecvPacket(u8*, void*) { return 0; }
 void Camera_Start(int, void*) {}
 void Camera_Stop(int, void*) {}
 void Camera_CaptureFrame(int, u32* frame, int width, int height, bool yuv, void*) {
-    if (frame && width > 0 && height > 0 && width <= 640 && height <= 480)
-        std::fill_n(frame, static_cast<std::size_t>(width)*height, yuv ? 0x80008000U : 0U);
+    if (!frame || width <= 0 || height <= 0 || width > 640 || height > 480 ||
+        (yuv && ((width & 1) || (height & 1)))) return;
+    const auto pixels = static_cast<std::size_t>(width)*height;
+    // DSi_Camera's YUYV buffer holds two pixels per u32, while RGB uses one.
+    std::fill_n(frame, yuv ? pixels/2 : pixels, yuv ? 0x80008000U : 0U);
 }
 void Mic_Start(void*) {}
 void Mic_Stop(void*) {}

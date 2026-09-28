@@ -45,6 +45,74 @@ class MelonDsAdapterTest final : public QObject {
         return {path, root / hash / "game.sav", hash};
     }
 private slots:
+    void saveConfigurationMustMatchBoundRepositoryBeforeAndAfterStop() {
+        QTemporaryDir temporary;
+        const std::filesystem::path root(temporary.path().toStdWString());
+        const auto configA = writeHeader(root, syntheticHeader());
+        std::filesystem::create_directories(root/"other-game");
+        auto otherHeader = syntheticHeader();
+        otherHeader[0] = 'B';
+        const auto configB = writeHeader(root/"other-game", otherHeader);
+        SaveRepository repositoryA(configA.savePath.parent_path(), std::chrono::system_clock::now);
+        SaveRepository repositoryB(configB.savePath.parent_path(), std::chrono::system_clock::now);
+        const std::vector<std::uint8_t> first{1,2,3}, second{9,8,7}, changed{4,5,6};
+        QCOMPARE(repositoryA.replace(first), SaveWriteError::None);
+        QCOMPARE(repositoryB.replace(second), SaveWriteError::None);
+        QCOMPARE(std::filesystem::file_size(configA.savePath), std::filesystem::file_size(configB.savePath));
+        MelonDsAdapter adapter(repositoryA, {}, root);
+
+        QVERIFY(!adapter.load(configB).ok());
+        QVERIFY(!adapter.isRunning());
+        QCOMPARE(adapter.start().code, EmulationErrorCode::CoreFailure);
+        QCOMPARE(repositoryA.load(), first);
+        QCOMPARE(repositoryB.load(), second);
+
+        auto differentPath = configA;
+        differentPath.savePath = root/"different-location"/configA.romSha256/"game.sav";
+        QVERIFY(!adapter.load(differentPath).ok());
+        auto differentHash = configA;
+        differentHash.romSha256 = configB.romSha256;
+        QVERIFY(!adapter.load(differentHash).ok());
+
+        QVERIFY(adapter.load(configA).ok());
+        std::vector<std::uint8_t> loaded;
+        QVERIFY(MelonDsTestAccess::inspectCartridge(configA, repositoryA, loaded).ok());
+        QCOMPARE((std::vector<std::uint8_t>(loaded.begin(), loaded.begin()+3)), first);
+        QVERIFY(MelonDsTestAccess::startFreeBios(adapter).ok());
+        MelonDsTestAccess::writeSave(adapter, changed, 1, 1);
+        QVERIFY(adapter.stop().ok());
+        QCOMPARE(repositoryA.load(), changed);
+        QCOMPARE(repositoryB.load(), second);
+
+        QVERIFY(!adapter.load(configB).ok());
+        QVERIFY(!adapter.isRunning());
+        QCOMPARE(repositoryA.load(), changed);
+        QCOMPARE(repositoryB.load(), second);
+    }
+    void savePathMatchingIsLexicalAndWorksBeforeFileCreation() {
+        QTemporaryDir temporary;
+        const std::filesystem::path root(temporary.path().toStdWString());
+        const auto config = writeHeader(root, syntheticHeader());
+        SaveRepository repository(config.savePath.parent_path(), std::chrono::system_clock::now);
+        MelonDsAdapter adapter(repository, {}, root);
+        QVERIFY(!std::filesystem::exists(config.savePath.parent_path()));
+        auto equivalent = config;
+        equivalent.savePath = config.savePath.parent_path()/"not-created"/".."/"game.sav";
+        QVERIFY(adapter.load(equivalent).ok());
+#ifdef _WIN32
+        auto spelling = config.savePath.generic_wstring();
+        std::ranges::transform(spelling, spelling.begin(), [](wchar_t c){ return std::towupper(c); });
+        equivalent.savePath = std::filesystem::path(spelling);
+        QVERIFY(adapter.load(equivalent).ok());
+#endif
+        auto wrongName = config;
+        wrongName.savePath = config.savePath.parent_path()/"other.sav";
+        QVERIFY(!adapter.load(wrongName).ok());
+        MelonDsAdapter nonHash(SaveRepository(root/"wrong-key", std::chrono::system_clock::now), {}, root);
+        auto invalid = config;
+        invalid.savePath = root/"wrong-key"/"game.sav";
+        QVERIFY(!nonHash.load(invalid).ok());
+    }
     void bufferSizesAvoidNarrowingAndUpstreamPaddingOverflow() {
         QVERIFY(MelonDsTestAccess::bufferSizesAccepted(0x1000, 0));
         QVERIFY(MelonDsTestAccess::bufferSizesAccepted(0x80000000ULL, 0xFFFFFFFFULL));

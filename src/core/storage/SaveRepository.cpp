@@ -80,7 +80,7 @@ SaveWriteError SaveRepository::replace(std::span<const std::uint8_t> bytes) {
     }
 
     const auto temporary = directory_ / "game.sav.tmp";
-    const auto active = directory_ / "game.sav";
+    const auto active = activeSavePath();
     {
         std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
         if (!output) {
@@ -126,6 +126,6 @@ SaveWriteError SaveRepository::replace(std::span<const std::uint8_t> bytes) {
 }
 
 std::vector<std::uint8_t> SaveRepository::load() const {
-    std::ifstream input(directory_ / "game.sav", std::ios::binary);
+    std::ifstream input(activeSavePath(), std::ios::binary);
     return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(input), {});
 }

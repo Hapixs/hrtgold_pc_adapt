@@ -10,6 +10,41 @@ using namespace melonDS::Platform;
 class MelonPlatformTest final : public QObject {
     Q_OBJECT
 private slots:
+    void inactiveCameraHonorsBufferCapacity_data() {
+        QTest::addColumn<int>("width");
+        QTest::addColumn<int>("height");
+        QTest::addColumn<bool>("yuv");
+        QTest::addColumn<unsigned>("words");
+        QTest::addColumn<unsigned>("black");
+        QTest::newRow("rgb-small") << 2 << 2 << false << 4U << 0U;
+        QTest::newRow("rgb-odd") << 3 << 3 << false << 9U << 0U;
+        QTest::newRow("rgb-640x480") << 640 << 480 << false << 307200U << 0U;
+        QTest::newRow("yuv-small") << 2 << 2 << true << 2U << 0x80008000U;
+        QTest::newRow("yuv-actual-core-buffer") << 640 << 480 << true << 153600U << 0x80008000U;
+        QTest::newRow("zero-width") << 0 << 480 << true << 0U << 0U;
+        QTest::newRow("zero-height") << 640 << 0 << false << 0U << 0U;
+        QTest::newRow("negative-width") << -1 << 2 << true << 0U << 0U;
+        QTest::newRow("negative-height") << 2 << -1 << false << 0U << 0U;
+        QTest::newRow("too-wide") << 641 << 480 << false << 0U << 0U;
+        QTest::newRow("too-high") << 640 << 481 << true << 0U << 0U;
+        QTest::newRow("odd-yuv-width") << 3 << 2 << true << 0U << 0U;
+        QTest::newRow("odd-yuv-height") << 2 << 3 << true << 0U << 0U;
+    }
+    void inactiveCameraHonorsBufferCapacity() {
+        QFETCH(int, width); QFETCH(int, height); QFETCH(bool, yuv);
+        QFETCH(unsigned, words); QFETCH(unsigned, black);
+        constexpr melonDS::u32 canary = 0xABCDEF01U;
+        // The logical buffer is exactly 'words'. A large trailing red zone
+        // catches the old full-RGB-size YUV write without crashing the test.
+        std::vector<melonDS::u32> guarded(307202, canary);
+        Camera_CaptureFrame(0, guarded.data()+1, width, height, yuv, nullptr);
+        QCOMPARE(guarded.front(), canary);
+        QVERIFY(std::all_of(guarded.begin()+1, guarded.begin()+1+words,
+                            [black](auto pixel){ return pixel == black; }));
+        QVERIFY(std::all_of(guarded.begin()+1+words, guarded.end(),
+                            [](auto pixel){ return pixel == canary; }));
+        Camera_CaptureFrame(0, nullptr, width, height, yuv, nullptr);
+    }
     void filesAreConfinedAndPreserve64BitPositions() {
         QTemporaryDir temporary;
         MelonPlatformContext context;

@@ -10,6 +10,17 @@
 namespace {
 EmulationResult failure(EmulationErrorCode code, const char* message) { return {code, message}; }
 EmulationResult badState() { return failure(EmulationErrorCode::CoreFailure, "The emulator cannot perform this operation in its current state."); }
+bool sameSavePath(const std::filesystem::path& first, const std::filesystem::path& second) {
+    auto left = first.lexically_normal().generic_wstring();
+    auto right = second.lexically_normal().generic_wstring();
+#ifdef _WIN32
+    // App-generated paths use normal Windows case-insensitive naming. Lexical
+    // comparison also works before the hash directory or save file exists.
+    std::ranges::transform(left, left.begin(), [](wchar_t c){ return std::towlower(c); });
+    std::ranges::transform(right, right.begin(), [](wchar_t c){ return std::towlower(c); });
+#endif
+    return left == right;
+}
 }
 
 MelonDsAdapter::Impl::Impl(SaveRepository repository, std::shared_ptr<SdlAudioSink> sink,
@@ -45,7 +56,16 @@ EmulationResult MelonDsAdapter::load(const EmulationConfig& config) {
         !std::ranges::all_of(config.romSha256, [](char c){ return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }) ||
         !impl_->platform.dataDirectory.is_absolute())
         return failure(EmulationErrorCode::InvalidRom, "A local NDS file, valid hash, app data directory and 48 kHz direct boot are required.");
+    const auto repositoryPath = impl_->saves.activeSavePath().lexically_normal();
+    const auto requestedSave = config.savePath.lexically_normal();
+    if (!repositoryPath.is_absolute() || !sameSavePath(requestedSave, repositoryPath) ||
+        !sameSavePath(requestedSave.filename(), "game.sav") ||
+        !sameSavePath(requestedSave.parent_path().filename(), config.romSha256))
+        return failure(EmulationErrorCode::SaveIo, "The save path and ROM hash must match the bound save repository.");
     impl_->config = config;
+    // Size checks and repository reads/writes now refer to the same path,
+    // including when the caller used an equivalent spelling with '..'.
+    impl_->config.savePath = repositoryPath;
     impl_->loaded = true;
     impl_->platform.sensitiveDirectories = {config.romPath.parent_path(), config.savePath.parent_path(), impl_->platform.dataDirectory};
     return {};

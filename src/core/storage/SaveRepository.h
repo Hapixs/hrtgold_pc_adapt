@@ -15,6 +15,7 @@ public:
                    std::function<std::chrono::system_clock::time_point()> clock);
     SaveWriteError replace(std::span<const std::uint8_t> bytes);
     std::vector<std::uint8_t> load() const;
+    std::filesystem::path activeSavePath() const { return directory_ / "game.sav"; }
 
 private:
     std::filesystem::path directory_;
