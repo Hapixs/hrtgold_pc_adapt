@@ -14,7 +14,7 @@ function Check-Exit([string]$operation) {
     if ($LASTEXITCODE -ne 0) { throw "$operation failed (exit $LASTEXITCODE)." }
 }
 function Assert-NoPrivateFiles([string]$directory) {
-    $forbidden = Get-ChildItem -LiteralPath $directory -Recurse -File | Where-Object {
+    $forbidden = Get-ChildItem -LiteralPath $directory -Recurse -Force -File | Where-Object {
         $_.Extension -in '.nds','.sav','.dsv','.bin','.rom'
     }
     if ($forbidden) { throw 'Protected/private files found in package.' }
@@ -54,7 +54,7 @@ try {
     # Walk actual PE imports for every plugin, QML library and runtime DLL.
     # Windows system libraries remain supplied by the operating system.
     $queue = [Collections.Generic.Queue[string]]::new()
-    Get-ChildItem -LiteralPath $dist -Recurse -File | Where-Object { $_.Extension -in '.exe','.dll' } | ForEach-Object { $queue.Enqueue($_.FullName) }
+    Get-ChildItem -LiteralPath $dist -Recurse -Force -File | Where-Object { $_.Extension -in '.exe','.dll' } | ForEach-Object { $queue.Enqueue($_.FullName) }
     $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     while ($queue.Count -gt 0) {
         $binary = $queue.Dequeue()
