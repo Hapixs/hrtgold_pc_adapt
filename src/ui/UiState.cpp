@@ -1,6 +1,8 @@
 #include "ui/UiState.h"
 
 #include <Qt>
+#include <QScopedValueRollback>
+#include <QTimer>
 
 #include <algorithm>
 #include <cmath>
@@ -20,7 +22,14 @@ UiState::UiState(SessionController& session, InputRouter& router,
                  const RomValidator& validator, const AppPaths& paths,
                  QSettings& settings, RomPicker picker, VolumeSetter volumeSetter,
                  QObject* parent)
-    : QObject(parent), session_(session), router_(router), validator_(validator),
+    : UiState(session, router, [&validator](const std::filesystem::path& path) {
+          return validator.validate(path);
+      }, paths, settings, std::move(picker), std::move(volumeSetter), parent) {}
+
+UiState::UiState(SessionController& session, InputRouter& router, Validator validator,
+                 const AppPaths& paths, QSettings& settings, RomPicker picker,
+                 VolumeSetter volumeSetter, QObject* parent)
+    : QObject(parent), session_(session), router_(router), validator_(std::move(validator)),
       paths_(paths), settings_(settings), picker_(std::move(picker)),
       volumeSetter_(std::move(volumeSetter)), state_(session.state()) {
     const auto storedVolume = settings_.value(QStringLiteral("volume"), 100).toInt();
@@ -32,14 +41,70 @@ UiState::UiState(SessionController& session, InputRouter& router,
     if (volumeSetter_) volumeSetter_(volume_ / 100.0f);
     router_.synchronizeSessionState(state_);
     session_.onStateChanged([this](SessionState state) { onSessionState(state); });
-    session_.onError([this](const EmulationResult&) {
-        setStatusMessage(QStringLiteral("L’émulation s’est arrêtée. Un journal local a été conservé."));
-    });
+    session_.onError([this](const EmulationResult& error) { reportEmulationError(error); });
 }
 
 UiState::~UiState() {
     session_.onStateChanged({});
     session_.onError({});
+}
+
+void UiState::reportEmulationError(const EmulationResult& error) {
+    if (error.ok() || handlingError_) return;
+    QScopedValueRollback guard(handlingError_, true);
+    emit errorOccurred(static_cast<int>(error.code));
+    if (error.code == EmulationErrorCode::AudioUnavailable) {
+        bannerMessage_ = QStringLiteral("Audio indisponible — la partie continue sans son.");
+        emit bannerMessageChanged();
+        return;
+    }
+    if (error.code == EmulationErrorCode::SaveIo) {
+        // If the worker already stopped on an I/O failure, openMenu reports
+        // Error. Keep its last frame and block all input until acknowledged.
+        if (state_ == SessionState::Playing) session_.openMenu();
+        blockingError_ = true;
+        closeOptions();
+        setStatusMessage(QStringLiteral("La sauvegarde ne peut pas être protégée. La partie est en pause."));
+        emit blockingErrorChanged();
+        emit sessionStateChanged();
+        return;
+    }
+    if (error.code == EmulationErrorCode::InvalidRom)
+        setStatusMessage(QStringLiteral("Ce fichier n’est pas une ROM HeartGold valide."));
+    else if (error.code == EmulationErrorCode::MissingPrivateFile)
+        setStatusMessage(QStringLiteral("Sélectionnez vos fichiers système DS pour utiliser ce mode."));
+    else
+        setStatusMessage(QStringLiteral("L’émulation s’est arrêtée. Un journal local a été conservé."));
+    if (recoveryPending_) return;
+    recoveryPending_ = true;
+    QTimer::singleShot(0, this, [this, code = error.code, generation = recoveryGeneration_] {
+        if (generation != recoveryGeneration_) return;
+        recoveryPending_ = false;
+        // A new user selection may already have recovered before this callback.
+        if (state_ == SessionState::Error || state_ == SessionState::Playing || state_ == SessionState::MenuOpen)
+            stopSession();
+        if (code == EmulationErrorCode::MissingPrivateFile) emit privateFilesRequested();
+    });
+}
+
+void UiState::dismissError() {
+    if (!blockingError_) return;
+    blockingError_ = false;
+    emit blockingErrorChanged();
+    emit sessionStateChanged();
+    // An adapter that has already shut down cannot safely resume; acknowledge
+    // and return to the chooser. A live paused adapter remains in its menu.
+    if (state_ == SessionState::Error) stopSession();
+}
+
+void UiState::stopSession() {
+    if (state_ == SessionState::NoRom || state_ == SessionState::Loading || state_ == SessionState::Stopping) return;
+    QScopedValueRollback guard(handlingError_, true);
+    const auto result = session_.stop();
+    if (!result.ok()) {
+        emit errorOccurred(static_cast<int>(result.code));
+        setStatusMessage(QStringLiteral("L’émulation s’est arrêtée. Un journal local a été conservé."));
+    }
 }
 
 QStringList UiState::tileNames() const {
@@ -75,6 +140,7 @@ QString UiState::footerMenu() const {
 }
 
 void UiState::setSelectedTile(int tile) {
+    if (blockingError_) return;
     if (tile < 0 || tile >= 8 || selectedTile_ == tile) return;
     selectedTile_ = tile;
     setStatusMessage({});
@@ -82,6 +148,7 @@ void UiState::setSelectedTile(int tile) {
 }
 
 void UiState::activateSelected() {
+    if (blockingError_) return;
     if (state_ != SessionState::MenuOpen || optionsOpen_) return;
     if (selectedTile_ < 6) {
         setStatusMessage(QStringLiteral("Disponible dans une prochaine étape"));
@@ -96,13 +163,13 @@ void UiState::activateSelected() {
 }
 
 void UiState::resumeGame() {
+    if (blockingError_) return;
     if (optionsOpen_) {
         closeOptions();
         return;
     }
     if (state_ == SessionState::MenuOpen) {
-        const auto result = session_.closeMenu();
-        if (!result.ok()) setStatusMessage(QString::fromStdString(result.message));
+        session_.closeMenu();
     }
 }
 
@@ -112,39 +179,42 @@ void UiState::chooseRom() {
     else emit romSelectionRequested();
 }
 
-void UiState::loadRomPath(const QString& selectedPath) {
+void UiState::loadRomPath(const QString& selectedPath, bool rememberPath) {
     if (selectedPath.isEmpty()) return;
     if (!prepareRomSelection()) return;
     const auto romPath = std::filesystem::path(selectedPath.toStdWString());
-    const auto validation = validator_.validate(romPath);
+    const auto validation = validator_(romPath);
     if (validation.status != RomStatus::ValidHeartGold) {
         setStatusMessage(statusFor(validation.status));
         return;
     }
     const auto saveDirectory = paths_.saveDirectory(validation.sha256);
+    if (saveDirectory.empty()) {
+        setStatusMessage(statusFor(RomStatus::MalformedHeader));
+        return;
+    }
     std::error_code error;
     std::filesystem::create_directories(saveDirectory, error);
     if (error) {
-        setStatusMessage(QStringLiteral("La sauvegarde ne peut pas être protégée. La partie est en pause."));
+        reportEmulationError({EmulationErrorCode::SaveIo, {}});
         return;
     }
-    EmulationConfig config{romPath, saveDirectory / "native.sav", validation.sha256};
+    EmulationConfig config{romPath, saveDirectory / "game.sav", validation.sha256};
     const auto result = session_.load(config);
     if (!result.ok()) {
-        setStatusMessage(QString::fromStdString(result.message));
         return;
     }
-    if (reopenLastGame_) settings_.setValue(QStringLiteral("lastRomPath"), selectedPath);
+    if (reopenLastGame_ && rememberPath) settings_.setValue(QStringLiteral("lastRomPath"), selectedPath);
     else settings_.remove(QStringLiteral("lastRomPath"));
-    currentRomPath_ = selectedPath;
+    currentRomPath_ = rememberPath ? selectedPath : QString{};
     setStatusMessage({});
 }
 
 bool UiState::prepareRomSelection() {
+    if (blockingError_ || (state_ != SessionState::NoRom && state_ != SessionState::Error)) return false;
     if (state_ != SessionState::Error) return true;
     const auto result = session_.stop();
     if (!result.ok()) {
-        setStatusMessage(QString::fromStdString(result.message));
         return false;
     }
     setStatusMessage({});
@@ -167,6 +237,7 @@ void UiState::restoreLastGame() {
 }
 
 void UiState::setOption(const QString& name, const QVariant& value) {
+    if (blockingError_) return;
     if (name == QLatin1String("volume")) {
         const auto type = value.metaType().id();
         if (type != QMetaType::Int && type != QMetaType::UInt &&
@@ -241,6 +312,11 @@ void UiState::handleKey(int key, bool pressed, bool repeated) {
 }
 
 void UiState::handleInput(const InputEvent& event) {
+    if (blockingError_) {
+        if (event.action == InputAction::Confirm && event.phase == InputPhase::Pressed && !event.repeated)
+            dismissError();
+        return;
+    }
     if (event.phase == InputPhase::Pressed) setActiveDevice(event.device);
     const auto decision = router_.route(event, state_);
     if (decision.target == RouteTarget::Emulator) {
@@ -297,6 +373,10 @@ void UiState::setActiveDevice(InputDeviceKind kind) {
 }
 
 void UiState::onSessionState(SessionState state) {
+    if (state == SessionState::Loading) {
+        ++recoveryGeneration_;
+        recoveryPending_ = false;
+    }
     router_.synchronizeSessionState(state);
     state_ = state;
     if (state != SessionState::MenuOpen) closeOptions();

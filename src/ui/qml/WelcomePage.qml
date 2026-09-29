@@ -67,6 +67,12 @@ FocusScope {
             color: "#c7dcea"
             font.pixelSize: 27
         }
+        Text {
+            x: 675; y: 705; width: 1065
+            text: "Vos fichiers restent sur votre ordinateur."
+            color: "#c7dcea"
+            font.pixelSize: 25
+        }
         Rectangle {
             id: chooseButton
             x: 155; y: 687; width: 455; height: 82

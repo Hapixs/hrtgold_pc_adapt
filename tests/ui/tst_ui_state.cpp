@@ -399,7 +399,7 @@ private slots:
         QCOMPARE(state.sessionState(), SessionState::Error);
         QCOMPARE(picker.size(), 0);
         QCOMPARE(observed->stops, 1);
-        QVERIFY(state.statusMessage().contains(QStringLiteral("cleanup failed")));
+        QCOMPARE(state.statusMessage(), QStringLiteral("L’émulation s’est arrêtée. Un journal local a été conservé."));
 
         const auto rom = validRom(temp);
         QVERIFY(!rom.isEmpty());

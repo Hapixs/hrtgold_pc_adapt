@@ -7,7 +7,7 @@ set(CMAKE_AUTOMOC ON)
 
 enable_testing()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick Test QuickTest)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Qml Quick Test QuickTest)
 find_package(SDL3 3.2 REQUIRED CONFIG)
 
 add_compile_definitions(HEARTGOLD_PC_APP_NAME="HeartGold PC Remastered")
@@ -46,6 +46,7 @@ target_link_libraries(heartgold_pc PRIVATE heartgold_sdl)
 add_library(heartgold_app STATIC src/app/AppBootstrap.cpp src/app/AppBootstrap.h)
 target_include_directories(heartgold_app PUBLIC src)
 target_link_libraries(heartgold_app PUBLIC heartgold_sdl heartgold_core heartgold_ui Qt6::Core)
+target_link_libraries(heartgold_app PUBLIC Qt6::Widgets PRIVATE heartgold_melonds)
 target_link_libraries(heartgold_pc PRIVATE heartgold_app)
 
 qt_add_resources(heartgold_pc "qml"
@@ -173,3 +174,10 @@ qt_add_executable(tst_melon_platform src/emulation/melonds/testing/tst_melon_pla
 target_include_directories(tst_melon_platform PRIVATE third_party/melonds/src)
 target_link_libraries(tst_melon_platform PRIVATE heartgold_melonds Qt6::Test)
 add_test(NAME tst_melon_platform COMMAND tst_melon_platform)
+
+qt_add_executable(tst_application_flow tests/integration/tst_application_flow.cpp)
+target_link_libraries(tst_application_flow PRIVATE heartgold_app Qt6::Test)
+add_test(NAME tst_application_flow COMMAND tst_application_flow)
+set_tests_properties(tst_application_flow PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
+)

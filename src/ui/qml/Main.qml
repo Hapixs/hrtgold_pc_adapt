@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 import HeartGoldPC 1.0
 
 ApplicationWindow {
@@ -81,15 +80,50 @@ ApplicationWindow {
         }
     }
 
-    FileDialog {
-        id: romDialog
-        title: "Choisir une ROM HeartGold"
-        nameFilters: ["Jeux Nintendo DS (*.nds)"]
-        onAccepted: uiState.loadRomUrl(romDialog.selectedFile)
+    Rectangle {
+        anchors.top: parent.top
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.topMargin: 20
+        width: Math.min(parent.width - 40, 850)
+        height: audioBanner.implicitHeight + 28
+        radius: 12
+        color: "#243e5c"
+        visible: uiState.bannerMessage.length > 0
+        Text {
+            id: audioBanner
+            anchors.centerIn: parent
+            width: parent.width - 32
+            text: uiState.bannerMessage
+            color: "#ffe0a2"
+            font.pixelSize: 18
+            wrapMode: Text.WordWrap
+        }
+    }
+    Dialog {
+        id: saveError
+        anchors.centerIn: parent
+        width: Math.min(window.width - 64, 620)
+        title: "Sauvegarde interrompue"
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        visible: uiState.blockingError
+        onOpened: saveAcknowledge.forceActiveFocus()
+        contentItem: Label {
+            text: uiState.statusMessage
+            wrapMode: Text.WordWrap
+        }
+        footer: DialogButtonBox {
+            Button {
+                id: saveAcknowledge
+                text: "Compris"
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+            onAccepted: uiState.dismissError()
+        }
     }
     Connections {
         target: uiState
-        function onRomSelectionRequested() { romDialog.open() }
         function onSessionStateChanged() {
             if (uiState.menuVisible) mainMenu.forceActiveFocus()
             else if (uiState.welcomeVisible) welcomePage.forceActiveFocus()

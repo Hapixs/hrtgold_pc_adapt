@@ -1,4 +1,5 @@
 #include "app/AppBootstrap.h"
+#include "emulation/fake/FakeEmulatorCore.h"
 
 #include <QtTest>
 #include <QDir>
@@ -35,7 +36,11 @@ private slots:
             settings.setValue("lastRomPath", rom);
         }
         {
-            AppBootstrap normal(false, settingsFile, temp.path());
+            AppBootstrap::Dependencies dependencies;
+            dependencies.createCore = [](const EmulationConfig&, std::shared_ptr<SdlAudioSink>, const AppPaths&) {
+                return std::make_unique<FakeEmulatorCore>();
+            };
+            AppBootstrap normal(false, settingsFile, temp.path(), std::move(dependencies));
             normal.start();
             QCOMPARE(normal.uiState()->sessionState(), SessionState::Playing);
             QDir saveRoot(temp.filePath("HeartGoldPCRemastered/saves"));
@@ -45,6 +50,16 @@ private slots:
             AppBootstrap fake(true, settingsFile, temp.path());
             fake.start();
             QTRY_COMPARE(fake.uiState()->sessionState(), SessionState::MenuOpen);
+        }
+        {
+            // The real default must reject this synthetic header before any
+            // instructions execute. This also catches a save binding mismatch:
+            // that would incorrectly display the blocking save error instead.
+            AppBootstrap production(false, settingsFile, temp.path());
+            production.start();
+            QTRY_COMPARE(production.uiState()->sessionState(), SessionState::NoRom);
+            QCOMPARE(production.uiState()->statusMessage(), QStringLiteral("Ce fichier n’est pas une ROM HeartGold valide."));
+            QVERIFY(!production.uiState()->blockingError());
         }
     }
 };
