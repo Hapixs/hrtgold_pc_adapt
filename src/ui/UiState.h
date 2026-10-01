@@ -27,6 +27,7 @@ class UiState final : public QObject {
     Q_PROPERTY(bool smoothScaling READ smoothScaling NOTIFY optionsChanged)
     Q_PROPERTY(bool fullscreen READ fullscreen NOTIFY optionsChanged)
     Q_PROPERTY(bool reopenLastGame READ reopenLastGame NOTIFY optionsChanged)
+    Q_PROPERTY(bool muteInBackground READ muteInBackground NOTIFY optionsChanged)
     Q_PROPERTY(bool optionsOpen READ optionsOpen NOTIFY optionsOpenChanged)
     Q_PROPERTY(int selectedOption READ selectedOption WRITE setSelectedOption NOTIFY selectedOptionChanged)
     Q_PROPERTY(QString footerConfirm READ footerConfirm NOTIFY activeDeviceChanged)
@@ -64,6 +65,7 @@ public:
     bool smoothScaling() const noexcept { return smoothScaling_; }
     bool fullscreen() const noexcept { return fullscreen_; }
     bool reopenLastGame() const noexcept { return reopenLastGame_; }
+    bool muteInBackground() const noexcept { return muteInBackground_; }
     bool optionsOpen() const noexcept { return optionsOpen_; }
     int selectedOption() const noexcept { return selectedOption_; }
     QString footerConfirm() const;
@@ -84,6 +86,7 @@ public:
     Q_INVOKABLE void handleKey(int key, bool pressed, bool repeated = false);
     void handleInput(const InputEvent& event);
     void setActiveDevice(InputDeviceKind kind);
+    void setApplicationActive(bool active);
 
 signals:
     void bannerMessageChanged();
@@ -105,6 +108,7 @@ private:
     void setStatusMessage(QString message);
     void moveSelection(UiCommand command);
     void handleOptionCommand(UiCommand command);
+    void updateEffectiveVolume();
 
     SessionController& session_;
     InputRouter& router_;
@@ -126,6 +130,8 @@ private:
     bool smoothScaling_{false};
     bool fullscreen_{false};
     bool reopenLastGame_{false};
+    bool muteInBackground_{false};
+    bool applicationActive_{true};
     bool optionsOpen_{false};
     int selectedOption_{0};
     QString currentRomPath_;

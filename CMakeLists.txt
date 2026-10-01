@@ -7,6 +7,10 @@ set(CMAKE_AUTOMOC ON)
 
 enable_testing()
 
+find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
+add_test(NAME tst_bootstrap_failfast COMMAND ${POWERSHELL_EXECUTABLE}
+    -NoProfile -File ${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/tst_bootstrap_failfast.ps1)
+
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Qml Quick Test QuickTest)
 find_package(SDL3 3.2 REQUIRED CONFIG)
 

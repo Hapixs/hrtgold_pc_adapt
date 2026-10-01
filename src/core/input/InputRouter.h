@@ -31,10 +31,10 @@ class InputRouter {
 public:
     void synchronizeSessionState(SessionState state) noexcept;
     RouteDecision route(const InputEvent& event, SessionState state);
+    void clearHeldButtons() noexcept;
 
 private:
     DsButtonMask combinedMask() const noexcept;
-    void clearHeldButtons() noexcept;
 
     std::array<DsButtonMask, 4> heldMasks_{};
 };

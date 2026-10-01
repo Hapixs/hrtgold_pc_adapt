@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath $bash)) {
 }
 
 & $bash -lc @'
-pacman -Syu --noconfirm
+pacman -Syu --noconfirm &&
 pacman -S --needed --noconfirm \
   git \
   mingw-w64-ucrt-x86_64-toolchain \

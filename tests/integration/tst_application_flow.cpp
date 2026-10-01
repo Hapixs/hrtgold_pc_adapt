@@ -3,6 +3,7 @@
 #include "emulation/fake/FakeEmulatorCore.h"
 #include <QtTest>
 #include <QFile>
+#include <QGuiApplication>
 #include <QQuickWindow>
 #include <QTemporaryDir>
 
@@ -13,6 +14,8 @@ struct Probe {
     EmulationConfig config;
     bool stoppedBeforeSdl{false};
     bool audio{true};
+    std::shared_ptr<SdlAudioSink> audioSink;
+    std::vector<std::int16_t> audioSamples;
     int privatePicks{};
 };
 class Api final : public SdlApi {
@@ -23,7 +26,10 @@ public:
     std::optional<InputDeviceKind> openGamepad(int) override { return InputDeviceKind::Xbox; }
     void closeGamepad(int) override {}
     bool openAudioStream() override { return p.audio; }
-    bool putAudio(std::span<const std::int16_t>) override { return p.audio; }
+    bool putAudio(std::span<const std::int16_t> samples) override {
+        p.audioSamples.assign(samples.begin(), samples.end());
+        return p.audio;
+    }
     void shutdown() override { p.stoppedBeforeSdl = !p.core || !p.core->isRunning(); }
 private:
     Probe& p;
@@ -36,7 +42,8 @@ AppBootstrap::Dependencies dependencies(Probe& p, RomStatus status = RomStatus::
     };
     deps.pickRom = [] { return QStringLiteral("C:/private-test/selected.nds"); };
     deps.pickPrivateFiles = [&] { ++p.privatePicks; };
-    deps.createCore = [&](const EmulationConfig& config, std::shared_ptr<SdlAudioSink>, const AppPaths&) {
+    deps.createCore = [&](const EmulationConfig& config, std::shared_ptr<SdlAudioSink> sink, const AppPaths&) {
+        p.audioSink = std::move(sink);
         p.config = config;
         auto core = std::make_unique<FakeEmulatorCore>(); p.core = core.get(); return core;
     };
@@ -48,6 +55,82 @@ void press(UiState& ui, int key) { ui.handleKey(key, true); ui.handleKey(key, fa
 class ApplicationFlowTest final : public QObject {
     Q_OBJECT
 private slots:
+    void backgroundAudioOptionMutesAndRestoresConfiguredVolume() {
+        QTemporaryDir temp; Probe p;
+        AppBootstrap app(false, temp.filePath("settings.ini"), temp.path(), dependencies(p));
+        QQuickWindow window; app.attachSurface(&window);
+        app.start(); auto& ui = *app.uiState(); ui.chooseRom();
+        const std::array<std::int16_t, 2> samples{1000, -1000};
+        const auto expectAudio = [&](std::int16_t level) {
+            p.audioSink->submitAudio(samples);
+            QCOMPARE(p.audioSamples, std::vector<std::int16_t>({level, static_cast<std::int16_t>(-level)}));
+        };
+        ui.setOption("volume", 40);
+        ui.setOption("muteInBackground", true);
+        expectAudio(400);
+        QEvent deactivate(QEvent::WindowDeactivate);
+        QCoreApplication::sendEvent(&window, &deactivate);
+        expectAudio(0);
+        QCOMPARE(ui.volume(), 40);
+        ui.setOption("volume", 65);
+        expectAudio(0);
+        QEvent activate(QEvent::WindowActivate);
+        QCoreApplication::sendEvent(&window, &activate);
+        expectAudio(650);
+        QVERIFY(QMetaObject::invokeMethod(qGuiApp, "applicationStateChanged", Qt::DirectConnection,
+            Q_ARG(Qt::ApplicationState, Qt::ApplicationInactive)));
+        expectAudio(0);
+        // Activating only the window must not undo the application's mute.
+        QCoreApplication::sendEvent(&window, &activate);
+        expectAudio(0);
+        ui.setOption("muteInBackground", false);
+        expectAudio(650);
+        ui.setOption("muteInBackground", true);
+        expectAudio(0);
+        QVERIFY(QMetaObject::invokeMethod(qGuiApp, "applicationStateChanged", Qt::DirectConnection,
+            Q_ARG(Qt::ApplicationState, Qt::ApplicationActive)));
+        expectAudio(650);
+        QCOMPARE(ui.sessionState(), SessionState::Playing);
+    }
+
+    void focusLossClearsButtonsUntilFreshPress_data() {
+        QTest::addColumn<bool>("application");
+        QTest::newRow("window") << false;
+        QTest::newRow("application") << true;
+    }
+    void focusLossClearsButtonsUntilFreshPress() {
+        QFETCH(bool, application);
+        QTemporaryDir temp; Probe p;
+        AppBootstrap app(false, temp.filePath("settings.ini"), temp.path(), dependencies(p));
+        QQuickWindow window; app.attachSurface(&window);
+        app.start(); auto& ui = *app.uiState(); ui.chooseRom();
+        ui.handleKey(Qt::Key_Right, true);
+        QCOMPARE(p.core->buttons(), toMask(DsButton::Right));
+        const auto changeFocus = [&](bool active) {
+            if (application) {
+                return QMetaObject::invokeMethod(qGuiApp, "applicationStateChanged", Qt::DirectConnection,
+                    Q_ARG(Qt::ApplicationState, active ? Qt::ApplicationActive : Qt::ApplicationInactive));
+            }
+            QEvent event(active ? QEvent::WindowActivate : QEvent::WindowDeactivate);
+            QCoreApplication::sendEvent(&window, &event);
+            return true;
+        };
+        QVERIFY(changeFocus(false));
+        QCOMPARE(p.core->buttons(), DsButtonMask{0});
+        ui.handleKey(Qt::Key_Down, true);
+        QCOMPARE(p.core->buttons(), DsButtonMask{0});
+        QVERIFY(changeFocus(true));
+        ui.handleKey(Qt::Key_Right, true, true);
+        QCOMPARE(p.core->buttons(), DsButtonMask{0});
+        // The lost release may never arrive. A fresh key must contain no stale
+        // Right or background Down bit, then the original key can rearm.
+        ui.handleKey(Qt::Key_Left, true);
+        QCOMPARE(p.core->buttons(), toMask(DsButton::Left));
+        ui.handleKey(Qt::Key_Left, false);
+        ui.handleKey(Qt::Key_Right, true);
+        QCOMPARE(p.core->buttons(), toMask(DsButton::Right));
+    }
+
     // Catches bypassed validation and raw private paths in user-visible errors.
     void invalidRomReturnsToWelcomeWithReason_data() {
         QTest::addColumn<int>("status"); QTest::addColumn<QString>("reason");
@@ -85,6 +168,12 @@ private slots:
         QTRY_COMPARE(app.uiState()->bannerMessage(), QStringLiteral("Audio indisponible — la partie continue sans son."));
         QCOMPARE(app.uiState()->sessionState(), SessionState::Playing);
         QVERIFY(p.core->isRunning()); QVERIFY(!app.uiState()->blockingError());
+        app.uiState()->setOption("muteInBackground", true);
+        app.uiState()->setApplicationActive(false);
+        app.uiState()->setApplicationActive(true);
+        QCOMPARE(app.uiState()->sessionState(), SessionState::Playing);
+        QVERIFY(!app.uiState()->blockingError());
+        QVERIFY(!app.uiState()->bannerMessage().isEmpty());
     }
     // Catches resume and game input escaping an unacknowledged save failure.
     void saveFailurePausesAndBlocksResumeUntilDismissed() {

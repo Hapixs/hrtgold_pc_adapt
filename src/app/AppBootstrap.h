@@ -66,5 +66,7 @@ private:
     bool fakeMenuOpened_{false};
     bool started_{false};
     bool shutDown_{false};
+    bool applicationActive_{true};
+    bool windowActive_{true};
     EmulationErrorCode reportedError_{EmulationErrorCode::None};
 };

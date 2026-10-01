@@ -62,6 +62,48 @@ QString validRom(QTemporaryDir& temp) {
 class UiStateTest final : public QObject {
     Q_OBJECT
 private slots:
+    void backgroundMutePersistsAndCanBeNavigatedByController() {
+        QTemporaryDir temp;
+        const auto settingsFile = temp.filePath("settings.ini");
+        RomValidator validator;
+        AppPaths paths(temp.path().toStdWString());
+        {
+            QSettings settings(settingsFile, QSettings::IniFormat);
+            SessionController session(std::make_unique<ProbeCore>());
+            InputRouter router;
+            UiState state(session, router, validator, paths, settings);
+            QVERIFY(session.load(fakeConfig()).ok());
+            QVERIFY(session.openMenu().ok());
+            state.setSelectedTile(6); state.activateSelected();
+            for (int step = 0; step < 4; ++step)
+                state.handleInput({InputAction::MoveDown, InputPhase::Pressed, InputDeviceKind::Xbox});
+            QCOMPARE(state.selectedOption(), 4);
+            state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox});
+            QVERIFY(state.optionsOpen());
+            QVERIFY(state.property("muteInBackground").toBool());
+            QCOMPARE(settings.value("muteInBackground"), QVariant(true));
+            state.handleInput({InputAction::MoveDown, InputPhase::Pressed, InputDeviceKind::Xbox});
+            QCOMPARE(state.selectedOption(), 5);
+            state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox});
+            QVERIFY(!state.optionsOpen());
+            settings.sync();
+        }
+        QSettings settings(settingsFile, QSettings::IniFormat);
+        SessionController session(std::make_unique<ProbeCore>());
+        InputRouter router;
+        float audibleVolume = -1.0f;
+        UiState state(session, router, validator, paths, settings, {},
+                      [&](float volume) { audibleVolume = volume; });
+        QVERIFY(state.property("muteInBackground").toBool());
+        state.setApplicationActive(false);
+        QCOMPARE(audibleVolume, 0.0f);
+        state.setOptionValue(4, false);
+        QCOMPARE(audibleVolume, 1.0f);
+        QCOMPARE(settings.value("muteInBackground"), QVariant(false));
+        state.setOption("muteInBackground", "invalid");
+        QVERIFY(!state.property("muteInBackground").toBool());
+    }
+
     void unavailableTilesKeepMenuAndReportStatus() {
         QTemporaryDir temp;
         QSettings settings(temp.filePath("settings.ini"), QSettings::IniFormat);
@@ -301,7 +343,7 @@ private slots:
         state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox});
         QVERIFY(state.optionsOpen());
         state.handleInput({InputAction::MoveUp, InputPhase::Pressed, InputDeviceKind::Xbox});
-        QCOMPARE(state.selectedOption(), 4);
+        QCOMPARE(state.selectedOption(), 5);
         state.handleInput({InputAction::Confirm, InputPhase::Pressed, InputDeviceKind::Xbox});
         QVERIFY(!state.optionsOpen());
     }

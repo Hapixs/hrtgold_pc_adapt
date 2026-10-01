@@ -43,8 +43,9 @@ signalent leur indisponibilité ; **Options** et **Reprendre** fonctionnent.
 - **Tab / Start** : menu et pause ; **Échap / bouton est** : retour/reprise.
 - **Flèches ou WASD / croix directionnelle** : navigation.
 - **Entrée ou E / bouton sud** : confirmation ; **F11** : plein écran.
-- **Options** : volume, filtrage nearest/linear, plein écran et réouverture
-  facultative du dernier jeu. Seule cette option autorise à conserver le chemin
+- **Options** : volume, filtre net à échelle entière, filtre lissé à taille
+  maximale, plein écran, silence en arrière-plan et réouverture facultative
+  du dernier jeu. Seule cette dernière option autorise à conserver le chemin
   d’une sélection faite dans le sélecteur. `--rom` reste temporaire.
 
 Les sauvegardes natives sont stockées dans

@@ -64,6 +64,7 @@ ApplicationWindow {
             smoothScaling: uiState.smoothScaling
             fullscreen: uiState.fullscreen
             reopenLastGame: uiState.reopenLastGame
+            muteInBackground: uiState.muteInBackground
             selectedOption: uiState.selectedOption
             onOptionValueRequested: function(index, value) { uiState.setOptionValue(index, value) }
             onCloseRequested: uiState.closeOptions()

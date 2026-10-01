@@ -9,6 +9,7 @@
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
+#include <QGuiApplication>
 #include <QStandardPaths>
 
 // The session keeps one stable interface; every successful selection builds a
@@ -123,6 +124,11 @@ AppBootstrap::AppBootstrap(bool fakeMode, const QString& settingsFile,
         }
     });
     QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, &AppBootstrap::shutdown);
+    QObject::connect(qGuiApp, &QGuiApplication::applicationStateChanged, this,
+        [this](Qt::ApplicationState state) {
+            applicationActive_ = state == Qt::ApplicationActive;
+            uiState_->setApplicationActive(applicationActive_ && windowActive_);
+        });
 }
 
 AppBootstrap::~AppBootstrap() {
@@ -141,6 +147,11 @@ void AppBootstrap::attachSurface(QObject* root) {
 }
 bool AppBootstrap::eventFilter(QObject* watched, QEvent* event) {
     if (watched == root_ && event->type() == QEvent::Close) shutdown();
+    if (watched == root_ && (event->type() == QEvent::WindowDeactivate ||
+                            event->type() == QEvent::WindowActivate)) {
+        windowActive_ = event->type() == QEvent::WindowActivate;
+        uiState_->setApplicationActive(applicationActive_ && windowActive_);
+    }
     return QObject::eventFilter(watched, event);
 }
 void AppBootstrap::start(const QString& romPath) {

@@ -38,6 +38,18 @@ TestCase {
         compare(optionSpy.signalArguments[0][1], true)
     }
 
+    function test_background_mute_control_requests_change() {
+        const control = findChild(panel, "muteInBackgroundControl")
+        verify(control !== null)
+        compare(control.checked, false)
+        panel.selectedOption = 4
+        verify(panel.optionFocusVisible)
+        mouseClick(control)
+        compare(optionSpy.count, 1)
+        compare(optionSpy.signalArguments[0][0], 4)
+        compare(optionSpy.signalArguments[0][1], true)
+    }
+
     function test_back_is_forwarded_without_local_close() {
         keyClick(Qt.Key_Escape)
         compare(closeSpy.count, 0)

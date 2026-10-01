@@ -6,6 +6,33 @@ class InputRouterTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    void keyboardRepeatCannotRearmMovementAfterResume() {
+        InputRouter router;
+        router.synchronizeSessionState(SessionState::MenuOpen);
+        const auto menuPress = router.route(
+            {InputAction::MoveRight, InputPhase::Pressed, InputDeviceKind::Keyboard},
+            SessionState::MenuOpen);
+        QCOMPARE(menuPress.target, RouteTarget::Overlay);
+        const auto menuRepeat = router.route(
+            {InputAction::MoveRight, InputPhase::Pressed, InputDeviceKind::Keyboard, true},
+            SessionState::MenuOpen);
+        QCOMPARE(menuRepeat.target, RouteTarget::Overlay);
+        QCOMPARE(menuRepeat.command, UiCommand::MoveRight);
+        QCOMPARE(router.route(
+            {InputAction::OpenMenu, InputPhase::Pressed, InputDeviceKind::Keyboard},
+            SessionState::MenuOpen).command, UiCommand::CloseMenu);
+        router.synchronizeSessionState(SessionState::Playing);
+        QCOMPARE(router.route(
+            {InputAction::MoveRight, InputPhase::Pressed, InputDeviceKind::Keyboard, true},
+            SessionState::Playing).target, RouteTarget::None);
+        QCOMPARE(router.route(
+            {InputAction::MoveRight, InputPhase::Released, InputDeviceKind::Keyboard},
+            SessionState::Playing).dsMask, DsButtonMask{0});
+        QCOMPARE(router.route(
+            {InputAction::MoveRight, InputPhase::Pressed, InputDeviceKind::Keyboard},
+            SessionState::Playing).dsMask, toMask(DsButton::Right));
+    }
+
     void routesPlayingActionsExclusively() {
         InputRouter router;
 

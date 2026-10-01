@@ -37,8 +37,9 @@ UiState::UiState(SessionController& session, InputRouter& router, Validator vali
     smoothScaling_ = settings_.value(QStringLiteral("smoothScaling"), false).toBool();
     fullscreen_ = settings_.value(QStringLiteral("fullscreen"), false).toBool();
     reopenLastGame_ = settings_.value(QStringLiteral("reopenLastGame"), false).toBool();
+    muteInBackground_ = settings_.value(QStringLiteral("muteInBackground"), false).toBool();
     if (!reopenLastGame_) settings_.remove(QStringLiteral("lastRomPath"));
-    if (volumeSetter_) volumeSetter_(volume_ / 100.0f);
+    updateEffectiveVolume();
     router_.synchronizeSessionState(state_);
     session_.onStateChanged([this](SessionState state) { onSessionState(state); });
     session_.onError([this](const EmulationResult& error) { reportEmulationError(error); });
@@ -249,16 +250,20 @@ void UiState::setOption(const QString& name, const QVariant& value) {
             std::floor(numeric) != numeric) return;
         const int next = static_cast<int>(numeric);
         volume_ = next;
-        if (volumeSetter_) volumeSetter_(volume_ / 100.0f);
+        updateEffectiveVolume();
         settings_.setValue(name, volume_);
     } else if (name == QLatin1String("smoothScaling") ||
                name == QLatin1String("fullscreen") ||
-               name == QLatin1String("reopenLastGame")) {
+               name == QLatin1String("reopenLastGame") ||
+               name == QLatin1String("muteInBackground")) {
         if (value.metaType().id() != QMetaType::Bool) return;
         const bool next = value.toBool();
         if (name == QLatin1String("smoothScaling")) smoothScaling_ = next;
         else if (name == QLatin1String("fullscreen")) fullscreen_ = next;
-        else {
+        else if (name == QLatin1String("muteInBackground")) {
+            muteInBackground_ = next;
+            updateEffectiveVolume();
+        } else {
             reopenLastGame_ = next;
             if (!next) settings_.remove(QStringLiteral("lastRomPath"));
             else if (!currentRomPath_.isEmpty())
@@ -275,14 +280,15 @@ void UiState::setOptionValue(int option, const QVariant& value) {
     static const QStringList names{QStringLiteral("volume"),
                                    QStringLiteral("smoothScaling"),
                                    QStringLiteral("fullscreen"),
-                                   QStringLiteral("reopenLastGame")};
+                                   QStringLiteral("reopenLastGame"),
+                                   QStringLiteral("muteInBackground")};
     if (option < 0 || option >= names.size()) return;
     setSelectedOption(option);
     setOption(names.at(option), value);
 }
 
 void UiState::setSelectedOption(int option) {
-    if (option < 0 || option > 4 || selectedOption_ == option) return;
+    if (option < 0 || option > 5 || selectedOption_ == option) return;
     selectedOption_ = option;
     emit selectedOptionChanged();
 }
@@ -312,6 +318,7 @@ void UiState::handleKey(int key, bool pressed, bool repeated) {
 }
 
 void UiState::handleInput(const InputEvent& event) {
+    if (!applicationActive_) return;
     if (blockingError_) {
         if (event.action == InputAction::Confirm && event.phase == InputPhase::Pressed && !event.repeated)
             dismissError();
@@ -344,26 +351,42 @@ void UiState::handleOptionCommand(UiCommand command) {
         return;
     }
     if (command == UiCommand::MoveUp) {
-        setSelectedOption((selectedOption_ + 4) % 5);
+        setSelectedOption((selectedOption_ + 5) % 6);
     } else if (command == UiCommand::MoveDown) {
-        setSelectedOption((selectedOption_ + 1) % 5);
+        setSelectedOption((selectedOption_ + 1) % 6);
     } else if (selectedOption_ == 0 &&
                (command == UiCommand::MoveLeft || command == UiCommand::MoveRight ||
                 command == UiCommand::Confirm)) {
         const int delta = command == UiCommand::MoveLeft ? -5 : 5;
         setOption(QStringLiteral("volume"), std::clamp(volume_ + delta, 0, 100));
-    } else if (selectedOption_ >= 1 && selectedOption_ <= 3) {
+    } else if (selectedOption_ >= 1 && selectedOption_ <= 4) {
         const auto name = selectedOption_ == 1 ? QStringLiteral("smoothScaling") :
                           selectedOption_ == 2 ? QStringLiteral("fullscreen") :
-                                                 QStringLiteral("reopenLastGame");
+                          selectedOption_ == 3 ? QStringLiteral("reopenLastGame") :
+                                                 QStringLiteral("muteInBackground");
         const bool current = selectedOption_ == 1 ? smoothScaling_ :
-                             selectedOption_ == 2 ? fullscreen_ : reopenLastGame_;
+                             selectedOption_ == 2 ? fullscreen_ :
+                             selectedOption_ == 3 ? reopenLastGame_ : muteInBackground_;
         if (command == UiCommand::Confirm) setOption(name, !current);
         else if (command == UiCommand::MoveLeft) setOption(name, false);
         else if (command == UiCommand::MoveRight) setOption(name, true);
-    } else if (selectedOption_ == 4 && command == UiCommand::Confirm) {
+    } else if (selectedOption_ == 5 && command == UiCommand::Confirm) {
         closeOptions();
     }
+}
+
+void UiState::setApplicationActive(bool active) {
+    applicationActive_ = active;
+    if (!active) {
+        router_.clearHeldButtons();
+        session_.setDsButtons(0);
+    }
+    updateEffectiveVolume();
+}
+
+void UiState::updateEffectiveVolume() {
+    if (volumeSetter_)
+        volumeSetter_(muteInBackground_ && !applicationActive_ ? 0.0f : volume_ / 100.0f);
 }
 
 void UiState::setActiveDevice(InputDeviceKind kind) {

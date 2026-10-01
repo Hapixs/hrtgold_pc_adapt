@@ -26,7 +26,7 @@ est câblé, mais un mode utilisant des BIOS privés reste hors de ce prototype.
 
 ## Contrôles disponibles sans données privées
 
-- Suites automatisées Debug et Release : 15/15 CTest dans chaque configuration.
+- Suites automatisées Debug et Release : 16/16 CTest dans chaque configuration.
 - Tests melonDS avec FreeBIOS, firmware vierge et données de sauvegarde
   synthétiques : inclus dans les suites ; aucune ROM commerciale exécutée.
 - Paquet Windows : construit dans `dist/HeartGoldPCRemastered/`, avec Qt/QML,

@@ -72,7 +72,9 @@ void InputRouter::synchronizeSessionState(SessionState state) noexcept {
 }
 
 RouteDecision InputRouter::route(const InputEvent& event, SessionState state) {
-    if (event.repeated && suppressesRepeat(event.action)) {
+    // DS buttons are held state, not repeated commands. Only a fresh physical
+    // press may arm them after a menu/focus transition cleared the masks.
+    if (event.repeated && (state == SessionState::Playing || suppressesRepeat(event.action))) {
         return {};
     }
 

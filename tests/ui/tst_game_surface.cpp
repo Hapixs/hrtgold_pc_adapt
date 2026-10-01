@@ -21,10 +21,66 @@ public:
     using GameSurface::updatePaintNode;
 };
 
+class InvalidatingGameSurface final : public GameSurface {
+public:
+    explicit InvalidatingGameSurface(QQuickItem* parent) : GameSurface(parent) {}
+    void invalidateNode() { invalidate_ = true; update(); }
+protected:
+    QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) override {
+        if (invalidate_.exchange(false)) {
+            delete oldNode;
+            oldNode = nullptr;
+        }
+        return GameSurface::updatePaintNode(oldNode, data);
+    }
+private:
+    std::atomic_bool invalidate_{false};
+};
+
 class GameSurfaceTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    void missingSceneNodeRecreatesTheUnchangedFrame() {
+        QQuickWindow window;
+        window.setColor(Qt::black);
+        window.resize(256, 192);
+        auto* surface = new InvalidatingGameSurface(window.contentItem());
+        surface->setSize(QSizeF(256, 192));
+        auto mailbox = std::make_shared<FrameMailbox>();
+        surface->setFrameMailbox(mailbox);
+        mailbox->publish(solidFrame(17, 0xff2040c0));
+        window.show();
+        QTRY_COMPARE_WITH_TIMEOUT(window.grabWindow().pixelColor(128, 96), QColor(32, 64, 192), 3000);
+        surface->invalidateNode();
+        QCOMPARE(window.grabWindow().pixelColor(128, 96), QColor(32, 64, 192));
+        QCOMPARE(surface->displayedSequence(), std::uint64_t{17});
+    }
+
+    void nearestUsesCenteredIntegerScale_data() {
+        QTest::addColumn<QSizeF>("container");
+        QTest::addColumn<QRectF>("expected");
+        QTest::newRow("720p") << QSizeF(1280, 720) << QRectF(256, 72, 768, 576);
+        QTest::newRow("1080p") << QSizeF(1920, 1080) << QRectF(320, 60, 1280, 960);
+        QTest::newRow("4k") << QSizeF(3840, 2160) << QRectF(512, 24, 2816, 2112);
+        QTest::newRow("small") << QSizeF(128, 100) << QRectF(0, 2, 128, 96);
+        QTest::newRow("tiny") << QSizeF(1, 1) << QRectF(0, 0.125, 1, 0.75);
+        QTest::newRow("empty") << QSizeF(0, 0) << QRectF();
+    }
+
+    void nearestUsesCenteredIntegerScale() {
+        QFETCH(QSizeF, container);
+        QFETCH(QRectF, expected);
+        InspectableGameSurface surface;
+        surface.setSize(container);
+        QSGSimpleTextureNode node;
+        surface.updatePaintNode(&node, nullptr);
+        QCOMPARE(node.rect(), expected);
+        surface.setSmooth(true);
+        surface.updatePaintNode(&node, nullptr);
+        QCOMPARE(node.rect(), GameSurface::fitRect(container));
+    }
+
     void fitRectPreservesFourByThree_data() {
         QTest::addColumn<QSizeF>("container");
         QTest::addColumn<QRectF>("expected");
@@ -78,8 +134,8 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!(image = window.grabWindow()).isNull(), 3000);
         QCOMPARE(image.pixelColor(200, 200), QColor(32, 64, 192));
         QCOMPARE(image.pixelColor(1, 1), QColor(Qt::black));
-        QCOMPARE(image.pixelColor(1, 51), QColor(255, 0, 0));
-        QCOMPARE(image.pixelColor(398, 348), QColor(0, 255, 0));
+        QCOMPARE(image.pixelColor(72, 104), QColor(255, 0, 0));
+        QCOMPARE(image.pixelColor(327, 295), QColor(0, 255, 0));
         QCOMPARE(image.pixelColor(398, 398), QColor(Qt::black));
     }
 

@@ -76,7 +76,7 @@ QSGNode *GameSurface::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
     const auto frame = frameMailbox_ ? frameMailbox_->latest() : acceptedFrames_.latest();
 
     if (frame && frame->width == kDsScreenWidth && frame->height == kDsScreenHeight &&
-        frame->sequence > renderedSequence_.load(std::memory_order_acquire) && window()) {
+        (!node || frame->sequence > renderedSequence_.load(std::memory_order_acquire)) && window()) {
         QImage image(kDsScreenWidth, kDsScreenHeight, QImage::Format_RGBA8888);
         for (int y = 0; y < kDsScreenHeight; ++y) {
             auto *row = image.scanLine(y);
@@ -106,7 +106,14 @@ QSGNode *GameSurface::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) {
     }
 
     if (node) {
-        node->setRect(fitRect(boundingRect().size()));
+        auto rect = fitRect(boundingRect().size());
+        if (!smooth() && rect.width() >= kDsScreenWidth && rect.height() >= kDsScreenHeight) {
+            const auto scale = std::floor(std::min(width() / kDsScreenWidth, height() / kDsScreenHeight));
+            const auto imageWidth = kDsScreenWidth * scale;
+            const auto imageHeight = kDsScreenHeight * scale;
+            rect = {(width() - imageWidth) / 2, (height() - imageHeight) / 2, imageWidth, imageHeight};
+        }
+        node->setRect(rect);
         node->setFiltering(smooth() ? QSGTexture::Linear : QSGTexture::Nearest);
     }
     return node;
